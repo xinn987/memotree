@@ -1,0 +1,6 @@
+* text=auto
+
+# OpenSpec 文档使用 LF，避免 Windows 下反复出现 LF/CRLF 提示。
+*.md text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf

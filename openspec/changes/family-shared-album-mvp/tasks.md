@@ -1,8 +1,10 @@
 ## 1. Project Foundation
 
-- [ ] 1.1 Select MVP tech stack for mobile-first Web/PWA, backend API, database, and private object storage
-- [ ] 1.2 Define environment configuration for storage buckets, signed URL expiration, upload limits, and media processing
-- [ ] 1.3 Add baseline automated checks for linting, type checking, and tests
+- [ ] 1.1 Create React + Vite + TypeScript + Tailwind PWA project structure
+- [ ] 1.2 Create Go API project structure with configuration loading and health check
+- [ ] 1.3 Configure MySQL migrations and choose sqlc or GORM for data access
+- [ ] 1.4 Define environment configuration for R2 buckets, signed URL expiration, upload limits, and media processing
+- [ ] 1.5 Add baseline automated checks for frontend linting/type checking and backend tests
 
 ## 2. Family Access
 
@@ -14,10 +16,10 @@
 ## 3. Media Upload
 
 - [ ] 3.1 Implement media metadata model for photos, videos, upload status, preview status, and ownership
-- [ ] 3.2 Implement authorized upload flow to private object storage
+- [ ] 3.2 Implement authorized upload flow to Cloudflare R2 private object storage
 - [ ] 3.3 Implement batch upload UI with progress, partial failure handling, and retry
-- [ ] 3.4 Implement photo thumbnail generation after upload
-- [ ] 3.5 Implement video cover image generation after upload
+- [ ] 3.4 Implement Go Worker flow for photo thumbnail generation after upload
+- [ ] 3.5 Implement Go Worker flow for video cover image generation with FFmpeg after upload
 - [ ] 3.6 Show pending or processing state while preview assets are unavailable
 
 ## 4. Timeline Browsing
