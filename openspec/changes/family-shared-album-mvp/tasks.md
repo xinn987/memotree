@@ -1,10 +1,10 @@
 ## 1. Project Foundation
 
-- [ ] 1.1 Create React + Vite + TypeScript + Tailwind PWA project structure
-- [ ] 1.2 Create Go API project structure with configuration loading and health check
-- [ ] 1.3 Configure MySQL migrations and choose sqlc or GORM for data access
-- [ ] 1.4 Define environment configuration for R2 buckets, signed URL expiration, upload limits, and media processing
-- [ ] 1.5 Add baseline automated checks for frontend linting/type checking and backend tests
+- [x] 1.1 Create React + Vite + TypeScript + Tailwind PWA project structure
+- [x] 1.2 Create Go API project structure with configuration loading and health check
+- [x] 1.3 Configure MySQL migrations and choose sqlc or GORM for data access
+- [x] 1.4 Define environment configuration for R2 buckets, signed URL expiration, upload limits, and media processing
+- [x] 1.5 Add baseline automated checks for frontend linting/type checking and backend tests
 
 ## 2. Family Access
 

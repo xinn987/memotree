@@ -82,6 +82,42 @@ Alternatives considered:
 - 完全由应用服务器转发所有文件：权限控制强，但带宽成本和服务压力更高。
 - 国内 OSS/COS：如果主要用户在中国大陆且 R2 访问速度不理想，后续可以通过 S3-compatible storage adapter 迁移或增加国内存储实现。
 
+Update:
+
+- MVP 可以先试 Cloudflare R2，但由于主要用户在中国大陆，系统 SHALL NOT 在业务逻辑中写死 R2。
+- 后端应通过 S3-compatible storage adapter 访问对象存储，至少保留切换到阿里云 OSS、腾讯云 COS 或 MinIO 的配置边界。
+- 本地开发使用 MinIO 模拟私有对象存储。
+
+### Decision: Use Persistent Accounts With Passwordless Login
+
+MVP 使用持久化用户账号，并采用魔法链接或验证码作为无密码登录方式。邀请只授予家庭成员权限，不替代用户账号。
+
+Rationale:
+
+- 爸妈和爷爷奶奶不适合从第一版开始承担密码管理、找回密码和复杂登录流程。
+- 魔法链接或验证码可以降低登录门槛，但用户、登录身份和家庭成员关系仍然需要持久化落库。
+- 家庭权限来自邀请加入后的 membership，而不是来自“拿到链接即可访问”的匿名状态。
+
+### Decision: Use One-Time Invitations For Family Membership
+
+管理员创建的一条邀请在 MVP 中最多允许一个账号成功加入家庭。
+
+Rationale:
+
+- 一人一次的邀请更容易解释，也更容易撤销和审计。
+- 可以避免家庭邀请链接被转发后长期成为公共入口。
+- 被移除成员不能依赖旧邀请重新加入，必须由管理员重新邀请。
+
+### Decision: Optimize The First Screen For Elder Browsing
+
+首屏应以最近照片和视频时间线为主，上传作为明显但次要的入口存在。
+
+Rationale:
+
+- 第一批用户包含爸妈和爷爷奶奶，核心体验是打开就看到宝宝近况。
+- 主要上传者可能是爷爷，因此上传入口不能隐藏过深，但不应抢占浏览内容。
+- 下载原图原视频是兜底能力，应放在详情或工具入口中，而不是成为首页主动作。
+
 ### Decision: Separate Originals From Browsing Previews
 
 上传保存原文件，同时由独立 Go Worker 调用 FFmpeg 等工具生成用于时间线浏览的照片缩略图和视频封面图。
@@ -142,7 +178,6 @@ Rollback strategy:
 
 ## Open Questions
 
-- MVP 是否需要手机号/邮箱登录，还是可以先使用更轻量的魔法链接或第三方登录。
-- 邀请码是否允许多人复用，还是每个邀请链接只允许一个成员加入。
+- MVP 的登录身份优先使用手机号还是邮箱；当前仅确定采用持久化账号 + 无密码登录。
 - 上传文件大小上限和单次批量数量上限需要根据目标存储成本和移动端稳定性确定。
 - 时间线日期优先使用 EXIF/媒体拍摄时间还是上传时间；建议优先拍摄时间，缺失时回退上传时间。

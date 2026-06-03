@@ -1,0 +1,35 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: memotree-mysql
+    environment:
+      MYSQL_DATABASE: memotree
+      MYSQL_USER: memotree
+      MYSQL_PASSWORD: memotree
+      MYSQL_ROOT_PASSWORD: memotree-root
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    container_name: memotree-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: memotree
+      MINIO_ROOT_PASSWORD: memotree-secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+
+volumes:
+  mysql-data:
+  minio-data:
