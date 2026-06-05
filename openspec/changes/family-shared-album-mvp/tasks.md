@@ -15,11 +15,11 @@
 
 ## 3. Media Upload
 
-- [ ] 3.1 Implement media metadata model for photos, videos, upload status, preview status, and ownership
+- [ ] 3.1 Implement media asset, original file, rendition, upload status, preview status, and soft deletion metadata model
 - [ ] 3.2 Implement authorized upload flow to Cloudflare R2 private object storage
 - [ ] 3.3 Implement batch upload UI with progress, partial failure handling, and retry
-- [ ] 3.4 Implement Go Worker flow for photo thumbnail generation after upload
-- [ ] 3.5 Implement Go Worker flow for video cover image generation with FFmpeg after upload
+- [ ] 3.4 Implement Go Worker flow for photo thumbnail and display image generation after upload
+- [ ] 3.5 Implement Go Worker flow for video thumbnail and display video generation with FFmpeg after upload
 - [ ] 3.6 Show pending or processing state while preview assets are unavailable
 
 ## 4. Timeline Browsing

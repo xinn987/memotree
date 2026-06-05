@@ -2,7 +2,7 @@
 
 ### Requirement: Family Timeline
 
-The system SHALL provide a family timeline that displays uploaded photos and videos grouped by time.
+The system SHALL provide a family timeline that displays selected family photos and videos grouped by time.
 
 #### Scenario: View recent timeline
 
@@ -14,6 +14,26 @@ The system SHALL provide a family timeline that displays uploaded photos and vid
 - **WHEN** multiple media assets belong to the same calendar date
 - **THEN** the system groups them under that date and identifies the uploading member where useful
 
+#### Scenario: Render media assets, not original files
+
+- **WHEN** the timeline renders family media
+- **THEN** the system renders media asset records and their display assets rather than rendering original file records directly
+
+#### Scenario: Sort by captured time first
+
+- **WHEN** a media asset has a captured time
+- **THEN** the system places it in the main timeline according to captured time
+
+#### Scenario: Fall back to uploaded time
+
+- **WHEN** a media asset does not have a captured time
+- **THEN** the system places it in the main timeline according to uploaded time
+
+#### Scenario: Preserve uploaded time separately
+
+- **WHEN** a media asset appears in the main timeline
+- **THEN** the system preserves uploaded time separately for detail metadata, audit, and future recently-added views
+
 ### Requirement: Fast Timeline Loading
 
 The system SHALL optimize timeline loading for mobile viewing by using preview assets instead of original files.
@@ -21,7 +41,12 @@ The system SHALL optimize timeline loading for mobile viewing by using preview a
 #### Scenario: Load preview assets
 
 - **WHEN** the timeline renders photo or video items
-- **THEN** the system loads thumbnails or video cover images instead of original media files
+- **THEN** the system loads thumbnails, display images, or display videos instead of original media files
+
+#### Scenario: Display live photo as one item
+
+- **WHEN** the timeline renders a live photo media asset
+- **THEN** the system displays it as one timeline item using its static image rendition by default
 
 #### Scenario: Paginate timeline
 

@@ -5,8 +5,10 @@
 ## Auth / Family
 
 ```text
-POST /auth/magic/start
-POST /auth/magic/verify
+POST /auth/register
+POST /auth/login
+POST /auth/logout
+GET  /auth/session
 POST /families
 GET  /families
 POST /families/{familyId}/invitations
@@ -15,9 +17,12 @@ POST /invitations/{token}/join
 
 原则：
 
-- 登录产生持久化用户和会话。
+- 注册产生持久化用户、登录凭证和会话。
+- 登录凭证用于证明用户身份，会话用于浏览器后续请求的重复识别。
 - 邀请只赋予家庭成员权限，不替代账号。
+- 邀请加入流程可以和注册流程组合：用户通过有效邀请创建账号后，系统同时创建家庭成员关系。
 - 管理邀请必须是管理员成员。
+- MVP 使用账号密码登录；短信、邮箱、微信等恢复或第三方登录能力后置。
 
 ## Media Upload
 
