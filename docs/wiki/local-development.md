@@ -149,6 +149,27 @@ node tools/run-web.mjs
 node tools/run-web.mjs --kill-ports
 ```
 
+## 当前可测试流程
+
+Family Access 当前已经可以在本地完整测试：
+
+1. 运行 `node tools/dev.mjs --kill-ports` 启动 API、前端和本地依赖。
+2. 打开 `http://localhost:5173`。
+3. 注册第一个账号；第一个账号会成为系统初始管理员。
+4. 创建一个家庭；创建者会自动成为该家庭的 `admin`。
+5. 在家庭页生成邀请，复制邀请链接。
+6. 用无痕窗口或另一个浏览器打开邀请链接。
+7. 注册或登录另一个账号，并使用 URL 中的邀请加入家庭。
+8. 回到管理员页面刷新“最近邀请”，可以看到邀请变成“已使用”。
+
+邀请管理当前支持：
+
+- `admin` 创建邀请、查看最近邀请、复制待使用邀请、撤销待使用邀请。
+- 普通 `member` 不能创建、查看或撤销邀请。
+- `pending` 邀请可复制和撤销。
+- `used`、`revoked` 和 `expired` 邀请不可复制。
+- MVP 当前会为待使用邀请保存 `token_plaintext`，用于刷新后重新复制；邀请被使用或撤销后会清空 token 原文。
+
 ## Worker
 
 Worker 还没有接媒体处理流程。需要单独启动时：

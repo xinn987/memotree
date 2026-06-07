@@ -11,8 +11,10 @@ POST /auth/logout
 GET  /auth/session
 POST /families
 GET  /families
-POST /families/{familyId}/invitations
-POST /invitations/{token}/join
+POST /families/{familyId}/invites
+GET  /families/{familyId}/invites
+DELETE /families/{familyId}/invites/{inviteId}
+POST /invites/{token}/join
 ```
 
 原则：
@@ -22,7 +24,18 @@ POST /invitations/{token}/join
 - 邀请只赋予家庭成员权限，不替代账号。
 - 邀请加入流程可以和注册流程组合：用户通过有效邀请创建账号后，系统同时创建家庭成员关系。
 - 管理邀请必须是管理员成员。
+- 管理员可以查看家庭邀请列表，并撤销仍处于 `pending` 状态的邀请。
+- MVP 为了支持刷新后重新复制邀请链接，创建邀请时会临时保存 `token_plaintext`；邀请被使用或撤销后会清空该字段。
+- 前端只能复制仍处于 `pending` 且仍有 token 原文的邀请；`used`、`revoked` 和 `expired` 邀请不可复制。
 - MVP 使用账号密码登录；短信、邮箱、微信等恢复或第三方登录能力后置。
+
+当前实现状态：
+
+- 已实现账号注册、登录、退出和会话恢复。
+- 已实现创建家庭，并把创建者加入为 `admin` 成员。
+- 已实现邀请创建、邀请列表、邀请撤销和邀请加入。
+- 已实现管理员权限校验：普通成员不能创建、查看或撤销邀请。
+- 成员管理、移除成员和最后一个管理员保护仍未实现。
 
 ## Media Upload
 

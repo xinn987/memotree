@@ -52,6 +52,16 @@ The system SHALL allow an administrator member to invite other family members th
 - **WHEN** an authenticated user submits a valid unused or active invitation for a family
 - **THEN** the system adds the user as a member of that family
 
+#### Scenario: Administrator lists invitations
+
+- **WHEN** an administrator member opens invitation management for a family
+- **THEN** the system returns invitations for that family including status, intended member display name, expiration time, and a reusable token only when the invitation is still pending
+
+#### Scenario: Administrator revokes pending invitation
+
+- **WHEN** an administrator member revokes a pending invitation
+- **THEN** the system marks the invitation as revoked and prevents that invitation token from joining the family
+
 #### Scenario: Reject invalid invitation
 
 - **WHEN** a user submits an expired, revoked, or unknown invitation
