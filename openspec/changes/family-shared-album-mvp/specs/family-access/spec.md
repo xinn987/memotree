@@ -63,7 +63,7 @@ The system SHALL support a minimal role model for MVP access control.
 
 #### Scenario: Member can use core album features
 
-- **WHEN** an active family member uploads, views, or downloads media in the family
+- **WHEN** an active family member uploads or views media in the family
 - **THEN** the system permits the action after verifying membership
 
 #### Scenario: Only administrator can manage invitations
@@ -87,7 +87,7 @@ The system SHALL prevent removed members from accessing family media after remov
 
 #### Scenario: Removed member loses access
 
-- **WHEN** a removed member requests timeline data, media detail, upload authorization, or download authorization
+- **WHEN** a removed member requests timeline data, media detail, or upload authorization
 - **THEN** the system denies the request
 
 #### Scenario: Removed member content remains in family

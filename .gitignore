@@ -4,6 +4,10 @@
 node_modules/
 dist/
 coverage/
+.npm-cache/
+.gocache/
+.gomodcache/
+*.tsbuildinfo
 
 bin/
 tmp/

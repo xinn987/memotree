@@ -50,7 +50,7 @@ GET /families/{familyId}/media/{mediaId}
 - 默认按拍摄时间排序，缺失时回退上传时间。
 - 分页必须稳定，不能因新上传导致重复或跳项。
 
-## Original Download
+## Deferred: Original Download
 
 ```text
 POST /families/{familyId}/media/{mediaId}/download
@@ -58,6 +58,8 @@ POST /families/{familyId}/media/{mediaId}/download
 
 原则：
 
+- MVP 不实现下载入口和下载 API。
+- 原文件仍保存在私有对象存储中，为后续下载能力预留。
 - 每次下载前校验 active membership。
 - 返回短期下载 URL 或等效授权响应。
 - 不向未授权用户泄露对象 key 或可用 URL。

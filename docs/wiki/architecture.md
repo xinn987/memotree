@@ -7,7 +7,7 @@ Mobile PWA
    v
 Go API  ---- MySQL
    |
-   | signed upload/download URL
+   | signed upload URL / display asset access
    v
 Private Object Storage (R2 first, S3-compatible)
    ^
@@ -27,5 +27,6 @@ Go Worker ---- FFmpeg / image processing
 
 - 前端不持有长期公开媒体 URL。
 - 原图和原视频只存在私有对象存储。
-- API 每次生成上传/下载授权前必须校验家庭成员身份。
+- API 每次生成上传授权或返回展示资源访问引用前必须校验家庭成员身份。
+- MVP 不提供原文件下载入口，原文件下载授权后置。
 - Worker 不决定权限，只处理已入库且需要生成预览的媒体任务。

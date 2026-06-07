@@ -8,7 +8,8 @@ services:
       MYSQL_PASSWORD: memotree
       MYSQL_ROOT_PASSWORD: memotree-root
     ports:
-      - "3306:3306"
+      # 宿主机使用 3307，避免和开发机已有 MySQL 默认 3306 端口冲突。
+      - "3307:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:

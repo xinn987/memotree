@@ -21,7 +21,7 @@ The system SHALL allow active family members to upload selected photo, video, an
 
 ### Requirement: Batch Upload
 
-The system SHALL allow active family members to upload multiple photos and videos in one user flow.
+The system SHALL allow active family members to upload multiple photos and videos in one returnable upload task.
 
 #### Scenario: Upload multiple files
 
@@ -32,6 +32,36 @@ The system SHALL allow active family members to upload multiple photos and video
 
 - **WHEN** one file in a batch fails while other files succeed
 - **THEN** the system preserves the successful uploads and marks the failed file as retryable
+
+#### Scenario: Return to upload task
+
+- **WHEN** a member returns to an existing upload task
+- **THEN** the system shows current counts and item statuses for waiting, uploading, processing, ready, failed, and cancelled files
+
+#### Scenario: One active upload task per user per family
+
+- **WHEN** a user already has an active upload task in a family and attempts to start another upload
+- **THEN** the system routes the user to the existing active upload task instead of creating a second active task
+
+#### Scenario: Administrator can view family upload tasks
+
+- **WHEN** an active administrator views upload tasks for a family
+- **THEN** the system allows the administrator to see upload tasks created by family members
+
+#### Scenario: Member can view own upload tasks only
+
+- **WHEN** a non-administrator member views upload tasks
+- **THEN** the system returns only upload tasks created by that member
+
+#### Scenario: Stop upload task
+
+- **WHEN** an upload creator or active administrator stops an upload task
+- **THEN** the system keeps completed media and cancels unfinished upload items
+
+#### Scenario: Browser upload interruption
+
+- **WHEN** the browser page closes before an original file upload completes
+- **THEN** the system does not guarantee that original file upload continues in the background
 
 ### Requirement: Private Original Storage
 
@@ -74,7 +104,31 @@ The system SHALL record basic media metadata and generate Web-compatible display
 #### Scenario: Processing pending state
 
 - **WHEN** preview generation has not completed yet
-- **THEN** the system shows the media asset in a pending or processing state rather than blocking the whole timeline
+- **THEN** the system keeps the media asset out of the main timeline while exposing processing status through the upload batch or upload item result
+
+#### Scenario: Retry upload failure
+
+- **WHEN** an upload item fails before the original file is stored
+- **THEN** the system allows retrying that item by uploading the original file again
+
+#### Scenario: Retry processing failure
+
+- **WHEN** an upload item fails after the original file is stored but before display assets are ready
+- **THEN** the system allows retrying media processing without requiring the original file to be uploaded again
+
+### Requirement: Upload Limits
+
+The system SHALL enforce configurable upload limits to protect mobile browser stability, storage cost, and media processing capacity.
+
+#### Scenario: Limit files per upload task
+
+- **WHEN** a member selects more files than the configured per-task limit
+- **THEN** the system rejects the excess selection or asks the member to split the upload
+
+#### Scenario: Limit file size
+
+- **WHEN** a selected photo or video exceeds the configured size limit for its media type
+- **THEN** the system rejects that file with a clear error message
 
 ### Requirement: Media Deletion
 
@@ -83,7 +137,7 @@ The system SHALL allow administrators to remove mistaken or unwanted media from 
 #### Scenario: Administrator soft deletes media
 
 - **WHEN** an active administrator deletes an active media asset
-- **THEN** the system marks the media asset as deleted and removes it from timeline, detail, and download responses
+- **THEN** the system marks the media asset as deleted and removes it from timeline and detail responses
 
 #### Scenario: Member cannot delete media
 
