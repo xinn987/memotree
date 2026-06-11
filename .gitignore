@@ -7,6 +7,8 @@ coverage/
 .npm-cache/
 .gocache/
 .gomodcache/
+.gopath/
+.tmp/
 *.tsbuildinfo
 
 bin/

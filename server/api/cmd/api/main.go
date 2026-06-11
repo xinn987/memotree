@@ -13,6 +13,7 @@ import (
 
 	"memotree/server/api/internal/config"
 	"memotree/server/api/internal/httpapi"
+	"memotree/server/api/internal/storage"
 	"memotree/server/api/internal/store"
 )
 
@@ -45,9 +46,27 @@ func main() {
 		log.Printf("memotree api using in-memory store")
 	}
 
+	var storageService storage.Service
+	if cfg.StorageAccessKeyID != "" && cfg.StorageSecretKey != "" {
+		s3Storage, err := storage.NewS3Service(storage.S3Config{
+			Endpoint:        cfg.StorageEndpoint,
+			Region:          cfg.StorageRegion,
+			AccessKeyID:     cfg.StorageAccessKeyID,
+			SecretAccessKey: cfg.StorageSecretKey,
+			UsePathStyle:    cfg.StorageUsePathStyle,
+		})
+		if err != nil {
+			log.Fatalf("configure storage: %v", err)
+		}
+		storageService = s3Storage
+		log.Printf("memotree api using %s-compatible object storage", cfg.StorageProvider)
+	} else {
+		log.Printf("memotree api object storage disabled")
+	}
+
 	server := &http.Server{
 		Addr:    cfg.APIAddr,
-		Handler: httpapi.NewRouterWithStore(cfg, appStore),
+		Handler: httpapi.NewRouterWithDependencies(cfg, appStore, storageService),
 	}
 
 	log.Printf("memotree api listening on %s", cfg.APIAddr)

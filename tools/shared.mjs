@@ -13,6 +13,16 @@ export const serverDir = path.join(repoRoot, "server");
 export const webDir = path.join(repoRoot, "web");
 export const composeFile = path.join(repoRoot, "deploy", "docker-compose.dev.yml");
 export const localMySQLDSN = "memotree:memotree@tcp(127.0.0.1:3307)/memotree?parseTime=true";
+export const localStorageEnv = {
+  STORAGE_PROVIDER: "minio",
+  STORAGE_ENDPOINT: "http://127.0.0.1:9000",
+  STORAGE_REGION: "us-east-1",
+  STORAGE_ACCESS_KEY_ID: "memotree",
+  STORAGE_SECRET_ACCESS_KEY: "memotree-secret",
+  STORAGE_USE_PATH_STYLE: "true",
+  STORAGE_BUCKET_ORIGINALS: "memotree-originals",
+  STORAGE_BUCKET_PREVIEWS: "memotree-previews",
+};
 export const defaultGoProxy = "https://goproxy.cn,direct";
 
 // Windows 上 Go 可能安装后还没刷新当前终端 PATH，这里优先尝试默认安装位置。
@@ -46,10 +56,12 @@ function needsWindowsShell(command) {
 export function projectEnv(extraEnv = {}) {
   const goCache = path.join(repoRoot, ".gocache");
   const goModCache = path.join(repoRoot, ".gomodcache");
+  const goPath = path.join(repoRoot, ".gopath");
   const npmCache = path.join(webDir, ".npm-cache");
 
   mkdirSync(goCache, { recursive: true });
   mkdirSync(goModCache, { recursive: true });
+  mkdirSync(goPath, { recursive: true });
   mkdirSync(npmCache, { recursive: true });
 
   return {
@@ -57,6 +69,7 @@ export function projectEnv(extraEnv = {}) {
     // 统一把 Go 缓存放到项目内，避免不同机器的系统缓存权限差异影响测试。
     GOCACHE: goCache,
     GOMODCACHE: goModCache,
+    GOPATH: goPath,
     // 手动 go run 时也走国内 Go proxy，避免默认 proxy.golang.org 在本地网络下超时。
     GOPROXY: process.env.GOPROXY || defaultGoProxy,
     // npm 会读取 npm_config_cache；这里同样收束到项目内的忽略目录。
@@ -67,6 +80,48 @@ export function projectEnv(extraEnv = {}) {
 
 export function dockerComposeArgs(args) {
   return ["compose", "-f", composeFile, ...args];
+}
+
+// 等待 compose 服务 healthcheck 通过，避免 API 在 MySQL 初始化窗口里抢跑。
+export function waitForDockerServiceHealthy(service, { timeoutMs = 90_000, intervalMs = 1_000, name = service } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  let containerID = "";
+  let lastStatus = "";
+
+  while (Date.now() < deadline) {
+    const ps = spawnSync(commandName("docker"), dockerComposeArgs(["ps", "-q", service]), {
+      cwd: repoRoot,
+      env: projectEnv(),
+      encoding: "utf8",
+    });
+    containerID = ps.status === 0 ? ps.stdout.trim() : "";
+
+    if (containerID !== "") {
+      const inspect = spawnSync(commandName("docker"), [
+        "inspect",
+        containerID,
+        "--format",
+        "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}",
+      ], {
+        cwd: repoRoot,
+        env: projectEnv(),
+        encoding: "utf8",
+      });
+      lastStatus = inspect.status === 0 ? inspect.stdout.trim() : inspect.stderr.trim();
+      if (lastStatus === "healthy" || lastStatus === "running") {
+        console.log(`${name} is ready.`);
+        return;
+      }
+      if (lastStatus === "unhealthy" || lastStatus === "exited" || lastStatus === "dead") {
+        throw new Error(`${name} is ${lastStatus}. Check Docker logs for details.`);
+      }
+    }
+
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, intervalMs);
+  }
+
+  const suffix = lastStatus ? ` Last status: ${lastStatus}.` : "";
+  throw new Error(`${name} did not become healthy within ${timeoutMs}ms.${suffix}`);
 }
 
 export function run(command, args, options = {}) {

@@ -53,9 +53,45 @@ func TestMySQLStoreIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create family: %v", err)
 	}
+	assertMySQLTableExists(t, ctx, db, "media_assets")
+	assertMySQLTableExists(t, ctx, db, "media_originals")
+	assertMySQLTableExists(t, ctx, db, "media_renditions")
+	assertMySQLTableExists(t, ctx, db, "upload_batches")
+	assertMySQLTableExists(t, ctx, db, "upload_items")
+	isMember, err := mysqlStore.IsActiveMember(ctx, family.ID, root.ID)
+	if err != nil || !isMember {
+		t.Fatalf("creator should be active family member, isMember=%v err=%v", isMember, err)
+	}
 	isAdmin, err := mysqlStore.IsActiveAdmin(ctx, family.ID, root.ID)
 	if err != nil || !isAdmin {
 		t.Fatalf("creator should be family admin, isAdmin=%v err=%v", isAdmin, err)
+	}
+	isMember, err = mysqlStore.IsActiveMember(ctx, family.ID, second.ID)
+	if err != nil || isMember {
+		t.Fatalf("not-yet-joined user should not be active family member, isMember=%v err=%v", isMember, err)
+	}
+	batch, uploadItems, err := mysqlStore.CreateUploadBatch(ctx, CreateUploadBatchInput{
+		FamilyID:  family.ID,
+		CreatedBy: root.ID,
+		Items: []CreateUploadItemInput{
+			{
+				OriginalType:     OriginalTypeImage,
+				OriginalFilename: "baby.jpg",
+				ContentType:      "image/jpeg",
+				ByteSize:         12345,
+				ObjectKey:        "originals/families/1/users/1/baby.jpg",
+			},
+		},
+		Now: time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("create upload batch: %v", err)
+	}
+	if batch.Status != UploadBatchStatusCreated || batch.TotalCount != 1 || len(uploadItems) != 1 {
+		t.Fatalf("unexpected upload batch result: batch=%#v items=%#v", batch, uploadItems)
+	}
+	if _, _, err := mysqlStore.CreateUploadBatch(ctx, CreateUploadBatchInput{FamilyID: family.ID, CreatedBy: root.ID, Now: time.Now()}); err != ErrAlreadyExists {
+		t.Fatalf("expected duplicate active upload batch to fail, got %v", err)
 	}
 
 	revokedInvite, err := mysqlStore.CreateInvite(ctx, family.ID, "token-hash-revoke", "token-plain-revoke", root.ID, "外公", time.Now().Add(time.Hour))
@@ -91,6 +127,10 @@ func TestMySQLStoreIntegration(t *testing.T) {
 	if member.FamilyID != family.ID || member.Role != MemberRoleMember || member.DisplayName != "奶奶" {
 		t.Fatalf("unexpected joined member: %#v", member)
 	}
+	isMember, err = mysqlStore.IsActiveMember(ctx, family.ID, second.ID)
+	if err != nil || !isMember {
+		t.Fatalf("joined user should be active family member, isMember=%v err=%v", isMember, err)
+	}
 	invites, err = mysqlStore.ListInvitesForFamily(ctx, family.ID)
 	if err != nil {
 		t.Fatalf("list invites after join: %v", err)
@@ -104,6 +144,11 @@ func cleanMySQLTables(t *testing.T, ctx context.Context, db *sql.DB) {
 	t.Helper()
 	// 按外键依赖从子表到父表清理，保证集成测试每次从空库状态开始。
 	statements := []string{
+		"DELETE FROM upload_items",
+		"DELETE FROM media_renditions",
+		"DELETE FROM media_originals",
+		"DELETE FROM media_assets",
+		"DELETE FROM upload_batches",
 		"DELETE FROM family_invites",
 		"DELETE FROM family_members",
 		"DELETE FROM families",
@@ -115,5 +160,20 @@ func cleanMySQLTables(t *testing.T, ctx context.Context, db *sql.DB) {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			t.Fatalf("clean table with %q: %v", statement, err)
 		}
+	}
+}
+
+func assertMySQLTableExists(t *testing.T, ctx context.Context, db *sql.DB, tableName string) {
+	t.Helper()
+	var count int
+	if err := db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM information_schema.tables
+WHERE table_schema = DATABASE() AND table_name = ?
+`, tableName).Scan(&count); err != nil {
+		t.Fatalf("check table %s: %v", tableName, err)
+	}
+	if count != 1 {
+		t.Fatalf("expected table %s to exist", tableName)
 	}
 }

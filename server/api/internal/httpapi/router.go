@@ -11,19 +11,22 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
 
 	"memotree/server/api/internal/auth"
 	"memotree/server/api/internal/config"
+	"memotree/server/api/internal/storage"
 	"memotree/server/api/internal/store"
 )
 
 type app struct {
-	cfg   config.Config
-	store store.Store
-	now   func() time.Time
+	cfg     config.Config
+	store   store.Store
+	storage storage.Service
+	now     func() time.Time
 }
 
 type requestContextKey string
@@ -38,6 +41,10 @@ func NewRouter(cfg config.Config) http.Handler {
 // NewRouterWithStore 注入外部 store 创建路由。
 // API 进程使用它接入 MySQL store；测试使用它复用同一个 MemoryStore。
 func NewRouterWithStore(cfg config.Config, appStore store.Store) http.Handler {
+	return NewRouterWithDependencies(cfg, appStore, nil)
+}
+
+func NewRouterWithDependencies(cfg config.Config, appStore store.Store, storageService storage.Service) http.Handler {
 	if cfg.SessionCookieName == "" {
 		cfg.SessionCookieName = "memotree_session"
 	}
@@ -46,9 +53,10 @@ func NewRouterWithStore(cfg config.Config, appStore store.Store) http.Handler {
 	}
 
 	api := &app{
-		cfg:   cfg,
-		store: appStore,
-		now:   time.Now,
+		cfg:     cfg,
+		store:   appStore,
+		storage: storageService,
+		now:     time.Now,
 	}
 
 	mux := http.NewServeMux()
@@ -63,6 +71,7 @@ func NewRouterWithStore(cfg config.Config, appStore store.Store) http.Handler {
 	mux.HandleFunc("GET /families/{familyId}/invites", api.requireAuth(api.listInvites))
 	mux.HandleFunc("DELETE /families/{familyId}/invites/{inviteId}", api.requireAuth(api.revokeInvite))
 	mux.HandleFunc("POST /invites/{token}/join", api.requireAuth(api.joinInvite))
+	mux.HandleFunc("POST /families/{familyId}/media/upload-intents", api.requireAuth(api.createUploadIntents))
 	return withRequestLog(mux)
 }
 
@@ -338,6 +347,138 @@ func (a *app) joinInvite(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *app) createUploadIntents(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以上传媒体")
+		return
+	}
+	if a.storage == nil {
+		writeError(w, http.StatusServiceUnavailable, "对象存储尚未配置")
+		return
+	}
+
+	var input struct {
+		Files []struct {
+			Filename         string `json:"filename"`
+			OriginalFilename string `json:"originalFilename"`
+			ContentType      string `json:"contentType"`
+			ByteSize         int64  `json:"byteSize"`
+		} `json:"files"`
+	}
+	if !readJSON(w, r, &input) {
+		return
+	}
+	if len(input.Files) == 0 {
+		writeError(w, http.StatusBadRequest, "请选择要上传的文件")
+		return
+	}
+	if a.cfg.UploadMaxBatchCount > 0 && len(input.Files) > a.cfg.UploadMaxBatchCount {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("单次最多上传 %d 个文件", a.cfg.UploadMaxBatchCount))
+		return
+	}
+
+	now := a.now()
+	items := make([]store.CreateUploadItemInput, 0, len(input.Files))
+	for _, file := range input.Files {
+		filename := strings.TrimSpace(file.OriginalFilename)
+		if filename == "" {
+			filename = strings.TrimSpace(file.Filename)
+		}
+		contentType := strings.TrimSpace(file.ContentType)
+		originalType, err := originalTypeForContentType(contentType)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if filename == "" {
+			writeError(w, http.StatusBadRequest, "文件名不能为空")
+			return
+		}
+		if file.ByteSize <= 0 {
+			writeError(w, http.StatusBadRequest, "文件大小不合法")
+			return
+		}
+		if a.cfg.UploadMaxFileBytes > 0 && file.ByteSize > a.cfg.UploadMaxFileBytes {
+			writeError(w, http.StatusBadRequest, "文件超过上传大小限制")
+			return
+		}
+		objectKey, err := newOriginalObjectKey(familyID, current.ID, filename, now)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "生成上传路径失败")
+			return
+		}
+		items = append(items, store.CreateUploadItemInput{
+			OriginalType:     originalType,
+			OriginalFilename: filename,
+			ContentType:      contentType,
+			ByteSize:         file.ByteSize,
+			ObjectKey:        objectKey,
+		})
+	}
+
+	batch, createdItems, err := a.store.CreateUploadBatch(r.Context(), store.CreateUploadBatchInput{
+		FamilyID:  familyID,
+		CreatedBy: current.ID,
+		Items:     items,
+		Now:       now,
+	})
+	if errors.Is(err, store.ErrAlreadyExists) {
+		writeError(w, http.StatusConflict, "当前家庭已有进行中的上传任务")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "创建上传任务失败")
+		return
+	}
+
+	responseItems := make([]map[string]any, 0, len(createdItems))
+	expiresAt := now.Add(a.cfg.SignedURLTTL)
+	for _, item := range createdItems {
+		uploadURL, err := a.storage.GetSignedUploadURL(r.Context(), storage.SignedURLRequest{
+			Bucket:      a.cfg.OriginalsBucket,
+			ObjectKey:   item.ObjectKey,
+			ContentType: item.ContentType,
+			ExpiresIn:   a.cfg.SignedURLTTL,
+		})
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "生成上传授权失败")
+			return
+		}
+		responseItems = append(responseItems, map[string]any{
+			"id":               item.ID,
+			"uploadUrl":        uploadURL,
+			"method":           http.MethodPut,
+			"contentType":      item.ContentType,
+			"originalFilename": item.OriginalFilename,
+			"byteSize":         item.ByteSize,
+			"status":           item.Status,
+			"expiresAt":        expiresAt.Format(time.RFC3339),
+		})
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"batch": map[string]any{
+			"id":         batch.ID,
+			"familyId":   batch.FamilyID,
+			"status":     batch.Status,
+			"totalCount": batch.TotalCount,
+			"createdAt":  batch.CreatedAt.Format(time.RFC3339),
+		},
+		"items": responseItems,
+	})
+}
+
 func (a *app) requireAuth(next func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		current, ok := a.authenticate(r)
@@ -425,6 +566,26 @@ func parsePathID(r *http.Request, name string) (int64, error) {
 		return 0, fmt.Errorf("invalid path id %s", name)
 	}
 	return value, nil
+}
+
+func originalTypeForContentType(contentType string) (string, error) {
+	switch {
+	case strings.HasPrefix(contentType, "image/"):
+		return store.OriginalTypeImage, nil
+	case strings.HasPrefix(contentType, "video/"):
+		return store.OriginalTypeVideo, nil
+	default:
+		return "", fmt.Errorf("暂不支持该文件类型")
+	}
+}
+
+func newOriginalObjectKey(familyID int64, userID int64, filename string, now time.Time) (string, error) {
+	token, err := auth.NewToken()
+	if err != nil {
+		return "", err
+	}
+	extension := strings.ToLower(path.Ext(filename))
+	return fmt.Sprintf("originals/families/%d/users/%d/%s/%s%s", familyID, userID, now.UTC().Format("20060102"), token, extension), nil
 }
 
 func readJSON(w http.ResponseWriter, r *http.Request, output any) bool {

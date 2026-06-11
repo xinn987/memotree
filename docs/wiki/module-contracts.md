@@ -49,6 +49,8 @@ POST /families/{familyId}/media/{mediaId}/complete-upload
 - 创建 upload intent 前校验 active membership。
 - 每个文件独立记录状态，批量上传允许部分失败。
 - 原文件对象 key 由后端生成，前端不自行决定存储路径。
+- `upload-intents` 返回短期 `PUT` 上传 URL、上传项 ID、文件类型和过期时间；前端上传原文件时应使用响应里的 `Content-Type`。
+- MVP 本地开发使用 MinIO，线上可以使用 R2 或其他 S3-compatible 对象存储；业务代码只依赖 storage adapter。
 
 ## Timeline
 

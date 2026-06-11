@@ -5,12 +5,14 @@ import {
   dockerComposeArgs,
   ensureTool,
   ensureWebDependencies,
+  localStorageEnv,
   localMySQLDSN,
   printHelp,
   projectEnv,
   repoRoot,
   run,
   spawnWithPrefix,
+  waitForDockerServiceHealthy,
   waitForHTTP,
 } from "./shared.mjs";
 
@@ -44,6 +46,8 @@ try {
 if (!skipDeps && !useMemoryStore) {
   ensureTool("docker", ["version"]);
   run("docker", dockerComposeArgs(["up", "-d", "mysql", "minio"]));
+  console.log("Waiting for MySQL container health check.");
+  waitForDockerServiceHealthy("mysql", { name: "mysql" });
 }
 
 ensureWebDependencies();
@@ -53,7 +57,10 @@ if (!useMemoryStore) {
   apiArgs.push("--mysql");
 }
 
-const apiEnv = projectEnv(useMemoryStore ? {} : { MYSQL_DSN: process.env.MYSQL_DSN || localMySQLDSN });
+const apiEnv = projectEnv(useMemoryStore ? {} : {
+  ...withLocalStorageDefaults(),
+  MYSQL_DSN: process.env.MYSQL_DSN || localMySQLDSN,
+});
 let shuttingDown = false;
 const children = [];
 
@@ -99,4 +106,10 @@ function shutdown(exitCode) {
     }
   }
   setTimeout(() => process.exit(exitCode), 300);
+}
+
+function withLocalStorageDefaults() {
+  return Object.fromEntries(
+    Object.entries(localStorageEnv).map(([key, value]) => [key, process.env[key] || value]),
+  );
 }

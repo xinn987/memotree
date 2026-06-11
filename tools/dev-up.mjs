@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { dockerComposeArgs, ensureTool, printHelp, run } from "./shared.mjs";
+import { dockerComposeArgs, ensureTool, printHelp, run, waitForDockerServiceHealthy } from "./shared.mjs";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   printHelp("dev-up.mjs", "Start local Docker dependencies: MySQL and MinIO.");
@@ -9,3 +9,5 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 
 ensureTool("docker", ["version"]);
 run("docker", dockerComposeArgs(["up", "-d", "mysql", "minio"]));
+console.log("Waiting for MySQL container health check.");
+waitForDockerServiceHealthy("mysql", { name: "mysql" });

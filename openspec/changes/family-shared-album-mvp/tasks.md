@@ -1,45 +1,45 @@
-## 1. Project Foundation
+## 1. 项目基础
 
-- [x] 1.1 Create React + Vite + TypeScript + Tailwind PWA project structure
-- [x] 1.2 Create Go API project structure with configuration loading and health check
-- [x] 1.3 Configure MySQL migrations and choose sqlc or GORM for data access
-- [x] 1.4 Define environment configuration for R2 buckets, signed URL expiration, upload limits, and media processing
-- [x] 1.5 Add baseline automated checks for frontend linting/type checking and backend tests
+- [x] 1.1 创建 React + Vite + TypeScript + Tailwind PWA 项目结构
+- [x] 1.2 创建 Go API 项目结构，包含配置读取和健康检查
+- [x] 1.3 配置 MySQL migration，并确定数据访问方式为明确 SQL 或 sqlc 风格
+- [x] 1.4 定义 R2 bucket、签名 URL 过期时间、上传限制和媒体处理相关环境配置
+- [x] 1.5 增加前端 lint/type check/build 和后端测试的基础自动化检查
 
-## 2. Family Access
+## 2. 家庭访问
 
-- [x] 2.1 Implement user authentication entry suitable for family members
-- [x] 2.2 Implement family creation with creator administrator membership
-- [x] 2.3 Implement invitation creation, revocation, expiration, and join flow
-- [ ] 2.4 Enforce active family membership on all family media APIs
+- [x] 2.1 实现适合家庭成员使用的账号认证入口
+- [x] 2.2 实现家庭创建，并让创建者自动成为管理员成员
+- [x] 2.3 实现邀请创建、撤销、过期判断和加入流程
+- [ ] 2.4 在所有家庭媒体 API 上强制校验 active family membership
 
-## 3. Media Upload
+## 3. 媒体上传
 
-- [ ] 3.1 Implement media asset, original file, rendition, upload batch, upload item, rendition status, and soft deletion metadata model
-- [ ] 3.2 Implement authorized upload flow to Cloudflare R2 private object storage
-- [ ] 3.3 Implement returnable upload task UI with progress, partial failure handling, retry, stop, and one-active-task enforcement
-- [ ] 3.4 Implement Go Worker flow for photo thumbnail and display image generation after upload
-- [ ] 3.5 Implement Go Worker flow for video thumbnail and display video generation with FFmpeg after upload
-- [ ] 3.6 Keep processing media out of the main timeline while showing upload and processing state in upload task views
+- [x] 3.1 实现媒体资产、原文件、派生资源、上传批次、上传项、派生资源状态和软删除元数据模型
+- [x] 3.2 实现授权上传到 Cloudflare R2 私有对象存储的流程
+- [ ] 3.3 实现可返回查看的上传任务 UI，包含进度、部分失败、重试、停止和单 active 任务约束
+- [ ] 3.4 实现 Go Worker 在上传后生成照片缩略图和展示图的流程
+- [ ] 3.5 实现 Go Worker 通过 FFmpeg 生成视频缩略图和展示视频的流程
+- [ ] 3.6 让处理中媒体不进入主时间线，同时在上传任务视图中展示上传和处理状态
 
-## 4. Timeline Browsing
+## 4. 时间线浏览
 
-- [ ] 4.1 Implement timeline query grouped by month and date
-- [ ] 4.2 Implement mobile-first timeline UI using preview assets
-- [ ] 4.3 Implement incremental loading or pagination for large timelines
-- [ ] 4.4 Implement media detail view for photos and videos
-- [ ] 4.5 Implement lightweight filters for media type and month
+- [ ] 4.1 实现按月份和日期分组的时间线查询
+- [ ] 4.2 实现移动端优先、使用预览资源的时间线 UI
+- [ ] 4.3 为大时间线实现增量加载或分页
+- [ ] 4.4 实现照片和视频的媒体详情页
+- [ ] 4.5 实现按媒体类型和月份的轻量筛选
 
-## 5. Deferred Original Download
+## 5. 原文件下载后置
 
-- [ ] 5.1 Defer permission-gated original media download authorization to a later release
-- [ ] 5.2 Keep original file metadata and private object keys available for future download support
-- [ ] 5.3 Do not expose original object keys or permanent public URLs to the frontend
+- [ ] 5.1 将需要权限校验的原文件下载授权后置到后续版本
+- [ ] 5.2 保留原文件元数据和私有对象 key，供后续下载能力使用
+- [ ] 5.3 不向前端暴露原文件 object key 或永久公开 URL
 
-## 6. Verification
+## 6. 验证
 
-- [ ] 6.1 Add tests for family membership authorization and invitation edge cases
-- [ ] 6.2 Add tests for upload success, unsupported files, partial batch failure, and retry behavior
-- [ ] 6.3 Add tests for timeline grouping, pagination, and preview-only loading
-- [ ] 6.4 Add tests that deleted, processing, failed, removed-member, and non-member media are excluded from timeline/detail responses
-- [ ] 6.5 Perform mobile browser smoke testing for upload, timeline browsing, and video detail
+- [ ] 6.1 增加家庭成员授权和邀请边界情况测试
+- [ ] 6.2 增加上传成功、不支持文件、批量部分失败和重试行为测试
+- [ ] 6.3 增加时间线分组、分页和仅加载预览资源的测试
+- [ ] 6.4 增加测试，确保已删除、处理中、失败、被移除成员和非成员媒体不会出现在时间线或详情响应中
+- [ ] 6.5 执行移动浏览器 smoke test，覆盖上传、时间线浏览和视频详情

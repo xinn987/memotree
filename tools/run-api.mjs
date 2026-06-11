@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { assertPortsAvailable, ensureTool, localMySQLDSN, printHelp, projectEnv, run, serverDir } from "./shared.mjs";
+import { assertPortsAvailable, ensureTool, localMySQLDSN, localStorageEnv, printHelp, projectEnv, run, serverDir } from "./shared.mjs";
 
 const useMySQL = process.argv.includes("--mysql");
 const killPorts = process.argv.includes("--kill-ports");
@@ -26,7 +26,10 @@ try {
   process.exit(1);
 }
 
-const extraEnv = useMySQL ? { MYSQL_DSN: process.env.MYSQL_DSN || localMySQLDSN } : {};
+const extraEnv = useMySQL ? {
+  ...withLocalStorageDefaults(),
+  MYSQL_DSN: process.env.MYSQL_DSN || localMySQLDSN,
+} : {};
 const env = projectEnv(extraEnv);
 
 if (useMySQL) {
@@ -36,3 +39,9 @@ if (useMySQL) {
 }
 
 run("go", ["run", "./api/cmd/api"], { cwd: serverDir, env });
+
+function withLocalStorageDefaults() {
+  return Object.fromEntries(
+    Object.entries(localStorageEnv).map(([key, value]) => [key, process.env[key] || value]),
+  );
+}

@@ -12,6 +12,14 @@ type SignedURLRequest struct {
 	ExpiresIn   time.Duration
 }
 
+type S3Config struct {
+	Endpoint        string
+	Region          string
+	AccessKeyID     string
+	SecretAccessKey string
+	UsePathStyle    bool
+}
+
 type Service interface {
 	// 上传和下载都必须由 API 先完成家庭成员权限校验，再生成短期授权 URL。
 	GetSignedUploadURL(ctx context.Context, request SignedURLRequest) (string, error)

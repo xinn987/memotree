@@ -20,6 +20,41 @@ const (
 	InviteStatusPending   = "pending"
 	InviteStatusUsed      = "used"
 	InviteStatusRevoked   = "revoked"
+
+	MediaTypePhoto     = "photo"
+	MediaTypeVideo     = "video"
+	MediaTypeLivePhoto = "live_photo"
+
+	MediaStatusActive  = "active"
+	MediaStatusDeleted = "deleted"
+
+	RenditionStatusPending    = "pending"
+	RenditionStatusProcessing = "processing"
+	RenditionStatusReady      = "ready"
+	RenditionStatusFailed     = "failed"
+
+	OriginalTypeImage = "image_original"
+	OriginalTypeVideo = "video_original"
+
+	RenditionTypeThumbnail    = "thumbnail"
+	RenditionTypeDisplayImage = "display_image"
+	RenditionTypeDisplayVideo = "display_video"
+
+	UploadBatchStatusCreated         = "created"
+	UploadBatchStatusUploading       = "uploading"
+	UploadBatchStatusProcessing      = "processing"
+	UploadBatchStatusPartiallyFailed = "partially_failed"
+	UploadBatchStatusCompleted       = "completed"
+	UploadBatchStatusStopped         = "stopped"
+
+	UploadItemStatusWaiting          = "waiting"
+	UploadItemStatusUploading        = "uploading"
+	UploadItemStatusUploaded         = "uploaded"
+	UploadItemStatusProcessing       = "processing"
+	UploadItemStatusReady            = "ready"
+	UploadItemStatusUploadFailed     = "upload_failed"
+	UploadItemStatusProcessingFailed = "processing_failed"
+	UploadItemStatusCancelled        = "cancelled"
 )
 
 var (
@@ -81,6 +116,103 @@ type FamilyMember struct {
 	Status      string
 }
 
+// MediaAsset 是时间线和详情页展示的核心对象。
+// 它归属于家庭，uploaded_by 仅表示贡献者和审计信息，不表示个人所有权。
+type MediaAsset struct {
+	ID              int64
+	FamilyID        int64
+	UploadedBy      int64
+	MediaType       string
+	Status          string
+	RenditionStatus string
+	CapturedAt      time.Time
+	UploadedAt      time.Time
+	DeletedAt       time.Time
+}
+
+// MediaOriginal 记录私有对象存储中的原文件。
+// 原文件 object key 永远不应直接暴露给未经过权限校验的前端响应。
+type MediaOriginal struct {
+	ID               int64
+	MediaAssetID     int64
+	OriginalType     string
+	ObjectKey        string
+	OriginalFilename string
+	ContentType      string
+	ByteSize         int64
+	ChecksumSHA256   string
+	Width            int
+	Height           int
+	DurationMillis   int64
+	CapturedAt       time.Time
+	UploadedAt       time.Time
+}
+
+// MediaRendition 记录浏览器展示用的派生资源，例如缩略图、展示图或展示视频。
+type MediaRendition struct {
+	ID             int64
+	MediaAssetID   int64
+	RenditionType  string
+	ObjectKey      string
+	ContentType    string
+	ByteSize       int64
+	Width          int
+	Height         int
+	DurationMillis int64
+	Status         string
+	ErrorMessage   string
+}
+
+// UploadBatch 表示一次可返回查看的上传任务，不作为时间线浏览对象。
+// ActiveSlot 用于 MySQL 唯一键约束同一用户同一家庭最多一个 active 任务。
+type UploadBatch struct {
+	ID             int64
+	FamilyID       int64
+	CreatedBy      int64
+	Status         string
+	ActiveSlot     int
+	TotalCount     int
+	ReadyCount     int
+	FailedCount    int
+	CancelledCount int
+	CreatedAt      time.Time
+	CompletedAt    time.Time
+	StoppedAt      time.Time
+}
+
+// UploadItem 表示上传任务中的单个文件状态。
+// 它可以先于 MediaAsset 存在；原文件完成并入库后再关联 media_asset_id。
+type UploadItem struct {
+	ID               int64
+	UploadBatchID    int64
+	MediaAssetID     int64
+	OriginalType     string
+	OriginalFilename string
+	ContentType      string
+	ByteSize         int64
+	ObjectKey        string
+	Status           string
+	ErrorMessage     string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	CompletedAt      time.Time
+}
+
+type CreateUploadBatchInput struct {
+	FamilyID  int64
+	CreatedBy int64
+	Items     []CreateUploadItemInput
+	Now       time.Time
+}
+
+type CreateUploadItemInput struct {
+	OriginalType     string
+	OriginalFilename string
+	ContentType      string
+	ByteSize         int64
+	ObjectKey        string
+}
+
 // Store 是 HTTP/领域逻辑访问持久化数据的唯一接口。
 // 方法保持偏业务语义，避免 handler 直接拼 SQL 或理解具体表结构。
 type Store interface {
@@ -92,9 +224,11 @@ type Store interface {
 	DeleteSession(ctx context.Context, tokenHash string) error
 	CreateFamily(ctx context.Context, displayName string, timezone string, creatorID int64, creatorDisplayName string) (FamilySummary, error)
 	ListFamiliesForUser(ctx context.Context, userID int64) ([]FamilySummary, error)
+	IsActiveMember(ctx context.Context, familyID int64, userID int64) (bool, error)
 	IsActiveAdmin(ctx context.Context, familyID int64, userID int64) (bool, error)
 	CreateInvite(ctx context.Context, familyID int64, tokenHash string, tokenPlaintext string, createdBy int64, memberDisplayName string, expiresAt time.Time) (FamilyInvite, error)
 	ListInvitesForFamily(ctx context.Context, familyID int64) ([]FamilyInvite, error)
 	RevokeInvite(ctx context.Context, familyID int64, inviteID int64, now time.Time) (FamilyInvite, error)
 	JoinInvite(ctx context.Context, tokenHash string, userID int64, fallbackDisplayName string, now time.Time) (FamilyMember, error)
+	CreateUploadBatch(ctx context.Context, input CreateUploadBatchInput) (UploadBatch, []UploadItem, error)
 }

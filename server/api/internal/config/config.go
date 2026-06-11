@@ -6,6 +6,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,9 @@ type Config struct {
 	StorageProvider     string
 	StorageEndpoint     string
 	StorageRegion       string
+	StorageAccessKeyID  string
+	StorageSecretKey    string
+	StorageUsePathStyle bool
 	OriginalsBucket     string
 	PreviewsBucket      string
 	SignedURLTTL        time.Duration
@@ -38,6 +42,9 @@ func Load() Config {
 		StorageProvider:     getEnv("STORAGE_PROVIDER", "r2"),
 		StorageEndpoint:     getEnv("STORAGE_ENDPOINT", ""),
 		StorageRegion:       getEnv("STORAGE_REGION", "auto"),
+		StorageAccessKeyID:  getEnv("STORAGE_ACCESS_KEY_ID", ""),
+		StorageSecretKey:    getEnv("STORAGE_SECRET_ACCESS_KEY", ""),
+		StorageUsePathStyle: getEnvBool("STORAGE_USE_PATH_STYLE", false),
 		OriginalsBucket:     getEnv("STORAGE_BUCKET_ORIGINALS", "memotree-originals"),
 		PreviewsBucket:      getEnv("STORAGE_BUCKET_PREVIEWS", "memotree-previews"),
 		SignedURLTTL:        time.Duration(getEnvInt("SIGNED_URL_TTL_SECONDS", 900)) * time.Second,
@@ -70,4 +77,12 @@ func getEnvInt64(key string, fallback int64) int64 {
 		return fallback
 	}
 	return value
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	value := strings.ToLower(getEnv(key, ""))
+	if value == "" {
+		return fallback
+	}
+	return value == "1" || value == "true" || value == "yes" || value == "on"
 }

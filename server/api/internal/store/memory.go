@@ -21,6 +21,8 @@ type MemoryStore struct {
 	nextFamilyID  int64
 	nextMemberID  int64
 	nextInviteID  int64
+	nextBatchID   int64
+	nextItemID    int64
 
 	users          map[int64]User
 	passwordHashes map[int64]string
@@ -29,6 +31,8 @@ type MemoryStore struct {
 	families       map[int64]family
 	members        map[int64]FamilyMember
 	invites        map[string]FamilyInvite
+	uploadBatches  map[int64]UploadBatch
+	uploadItems    map[int64]UploadItem
 }
 
 // family 是内存 store 内部结构；HTTP 响应只暴露 FamilySummary。
@@ -49,6 +53,8 @@ func NewMemoryStore() *MemoryStore {
 		families:       map[int64]family{},
 		members:        map[int64]FamilyMember{},
 		invites:        map[string]FamilyInvite{},
+		uploadBatches:  map[int64]UploadBatch{},
+		uploadItems:    map[int64]UploadItem{},
 	}
 }
 
@@ -155,6 +161,17 @@ func (s *MemoryStore) ListFamiliesForUser(_ context.Context, userID int64) ([]Fa
 		})
 	}
 	return result, nil
+}
+
+func (s *MemoryStore) IsActiveMember(_ context.Context, familyID int64, userID int64) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, member := range s.members {
+		if member.FamilyID == familyID && member.UserID == userID && member.Status == MemberStatusActive {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (s *MemoryStore) IsActiveAdmin(_ context.Context, familyID int64, userID int64) (bool, error) {
@@ -276,4 +293,53 @@ func (s *MemoryStore) markInviteUsed(tokenHash string, invite FamilyInvite, user
 	invite.UsedBy = userID
 	invite.UsedAt = now
 	s.invites[tokenHash] = invite
+}
+
+// CreateUploadBatch 创建上传任务和待上传文件条目。
+// 同一用户同一家庭只允许一个 active batch，和 MySQL 的唯一键语义保持一致。
+func (s *MemoryStore) CreateUploadBatch(_ context.Context, input CreateUploadBatchInput) (UploadBatch, []UploadItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, batch := range s.uploadBatches {
+		if batch.FamilyID == input.FamilyID && batch.CreatedBy == input.CreatedBy && batch.ActiveSlot == 1 {
+			return UploadBatch{}, nil, ErrAlreadyExists
+		}
+	}
+
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	s.nextBatchID++
+	batch := UploadBatch{
+		ID:         s.nextBatchID,
+		FamilyID:   input.FamilyID,
+		CreatedBy:  input.CreatedBy,
+		Status:     UploadBatchStatusCreated,
+		ActiveSlot: 1,
+		TotalCount: len(input.Items),
+		CreatedAt:  now,
+	}
+	s.uploadBatches[batch.ID] = batch
+
+	items := make([]UploadItem, 0, len(input.Items))
+	for _, itemInput := range input.Items {
+		s.nextItemID++
+		item := UploadItem{
+			ID:               s.nextItemID,
+			UploadBatchID:    batch.ID,
+			OriginalType:     itemInput.OriginalType,
+			OriginalFilename: itemInput.OriginalFilename,
+			ContentType:      itemInput.ContentType,
+			ByteSize:         itemInput.ByteSize,
+			ObjectKey:        itemInput.ObjectKey,
+			Status:           UploadItemStatusWaiting,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		}
+		s.uploadItems[item.ID] = item
+		items = append(items, item)
+	}
+	return batch, items, nil
 }

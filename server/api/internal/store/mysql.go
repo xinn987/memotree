@@ -244,6 +244,16 @@ WHERE family_id = ? AND user_id = ? AND status = ? AND role = ?
 	return count > 0, err
 }
 
+func (s *MySQLStore) IsActiveMember(ctx context.Context, familyID int64, userID int64) (bool, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM family_members
+WHERE family_id = ? AND user_id = ? AND status = ?
+`, familyID, userID, MemberStatusActive).Scan(&count)
+	return count > 0, err
+}
+
 // CreateInvite 保存邀请 token hash、token 原文和预填成员显示名。
 // MVP 阶段保存 token 原文，方便管理员在邀请管理里重新复制邀请链接。
 func (s *MySQLStore) CreateInvite(ctx context.Context, familyID int64, tokenHash string, tokenPlaintext string, createdBy int64, memberDisplayName string, expiresAt time.Time) (FamilyInvite, error) {
@@ -448,6 +458,78 @@ WHERE id = ?
 		return FamilyMember{}, err
 	}
 	return member, nil
+}
+
+// CreateUploadBatch 在事务中创建上传任务和文件条目。
+// active_slot=1 配合唯一键保证同一用户同一家庭最多只有一个 active 上传任务。
+func (s *MySQLStore) CreateUploadBatch(ctx context.Context, input CreateUploadBatchInput) (UploadBatch, []UploadItem, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return UploadBatch{}, nil, err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	result, err := tx.ExecContext(ctx, `
+INSERT INTO upload_batches (family_id, created_by, status, active_slot, total_count, created_at)
+VALUES (?, ?, ?, ?, ?, ?)
+`, input.FamilyID, input.CreatedBy, UploadBatchStatusCreated, 1, len(input.Items), now.UTC())
+	if err != nil {
+		if isDuplicateKey(err) {
+			return UploadBatch{}, nil, ErrAlreadyExists
+		}
+		return UploadBatch{}, nil, err
+	}
+	batchID, err := result.LastInsertId()
+	if err != nil {
+		return UploadBatch{}, nil, err
+	}
+
+	items := make([]UploadItem, 0, len(input.Items))
+	for _, itemInput := range input.Items {
+		itemResult, err := tx.ExecContext(ctx, `
+INSERT INTO upload_items (upload_batch_id, original_type, original_filename, content_type, byte_size, object_key, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`, batchID, itemInput.OriginalType, itemInput.OriginalFilename, itemInput.ContentType, itemInput.ByteSize, itemInput.ObjectKey, UploadItemStatusWaiting, now.UTC(), now.UTC())
+		if err != nil {
+			if isDuplicateKey(err) {
+				return UploadBatch{}, nil, ErrAlreadyExists
+			}
+			return UploadBatch{}, nil, err
+		}
+		itemID, err := itemResult.LastInsertId()
+		if err != nil {
+			return UploadBatch{}, nil, err
+		}
+		items = append(items, UploadItem{
+			ID:               itemID,
+			UploadBatchID:    batchID,
+			OriginalType:     itemInput.OriginalType,
+			OriginalFilename: itemInput.OriginalFilename,
+			ContentType:      itemInput.ContentType,
+			ByteSize:         itemInput.ByteSize,
+			ObjectKey:        itemInput.ObjectKey,
+			Status:           UploadItemStatusWaiting,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+		})
+	}
+	if err := tx.Commit(); err != nil {
+		return UploadBatch{}, nil, err
+	}
+
+	return UploadBatch{
+		ID:         batchID,
+		FamilyID:   input.FamilyID,
+		CreatedBy:  input.CreatedBy,
+		Status:     UploadBatchStatusCreated,
+		ActiveSlot: 1,
+		TotalCount: len(input.Items),
+		CreatedAt:  now,
+	}, items, nil
 }
 
 // findMemberInTx 在加入邀请事务中读取并锁定成员记录。

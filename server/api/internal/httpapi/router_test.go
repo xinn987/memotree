@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"time"
 
 	"memotree/server/api/internal/config"
+	"memotree/server/api/internal/storage"
 	"memotree/server/api/internal/store"
 )
 
@@ -154,6 +156,69 @@ func TestCurrentSessionReturnsEmptyFamilyArray(t *testing.T) {
 	}
 }
 
+func TestCreateUploadIntentRequiresActiveMembership(t *testing.T) {
+	sharedStore := store.NewMemoryStore()
+	router := NewRouterWithDependencies(
+		config.Config{
+			AppEnv:              "test",
+			SessionCookieName:   "memotree_test_session",
+			OriginalsBucket:     "memotree-originals",
+			SignedURLTTL:        15 * time.Minute,
+			UploadMaxFileBytes:  50 * 1024 * 1024,
+			UploadMaxBatchCount: 10,
+		},
+		sharedStore,
+		fakeStorageService{},
+	)
+
+	rootCookie, _ := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "root",
+		"password":    "secret123",
+		"displayName": "初始管理员",
+	})
+	_, family := postJSON(t, router, rootCookie, http.StatusCreated, "/families", map[string]string{
+		"displayName": "小树之家",
+	})
+	familyID := int(family["id"].(float64))
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	batch := uploadIntent["batch"].(map[string]any)
+	if batch["status"] != store.UploadBatchStatusCreated || batch["totalCount"] != float64(1) {
+		t.Fatalf("unexpected upload batch response: %#v", batch)
+	}
+	items := uploadIntent["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one upload item, got %#v", uploadIntent)
+	}
+	item := items[0].(map[string]any)
+	if item["uploadUrl"] == "" || item["method"] != http.MethodPut || item["contentType"] != "image/jpeg" {
+		t.Fatalf("unexpected upload item response: %#v", item)
+	}
+
+	memberCookie, _ := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "guest",
+		"password":    "secret123",
+		"displayName": "访客",
+	})
+	postJSON(t, router, memberCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "guest.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+}
+
 type nilFamiliesStore struct {
 	*store.MemoryStore
 }
@@ -238,4 +303,22 @@ func deleteJSON(t *testing.T, router http.Handler, cookie *http.Cookie, expected
 
 func itoa(value int) string {
 	return strconv.Itoa(value)
+}
+
+type fakeStorageService struct{}
+
+func (fakeStorageService) GetSignedUploadURL(_ context.Context, request storage.SignedURLRequest) (string, error) {
+	return "https://storage.example/upload/" + request.ObjectKey, nil
+}
+
+func (fakeStorageService) GetSignedDownloadURL(_ context.Context, request storage.SignedURLRequest) (string, error) {
+	return "https://storage.example/download/" + request.ObjectKey, nil
+}
+
+func (fakeStorageService) HeadObject(_ context.Context, bucket string, objectKey string) (storage.ObjectInfo, error) {
+	return storage.ObjectInfo{Bucket: bucket, ObjectKey: objectKey}, nil
+}
+
+func (fakeStorageService) DeleteObject(_ context.Context, _ string, _ string) error {
+	return nil
 }
