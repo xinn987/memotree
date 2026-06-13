@@ -48,6 +48,9 @@ if (!skipDeps && !useMemoryStore) {
   run("docker", dockerComposeArgs(["up", "-d", "mysql", "minio"]));
   console.log("Waiting for MySQL container health check.");
   waitForDockerServiceHealthy("mysql", { name: "mysql" });
+  console.log("Waiting for MinIO health check.");
+  await waitForHTTP("http://127.0.0.1:9000/minio/health/ready", { name: "minio", timeoutMs: 30_000 });
+  run("node", ["tools/init-storage.mjs"], { cwd: repoRoot });
 }
 
 ensureWebDependencies();
@@ -77,6 +80,12 @@ try {
   shutdown(1);
   await new Promise((resolve) => setTimeout(resolve, 350));
   process.exit(1);
+}
+
+if (!useMemoryStore) {
+  const workerChild = spawnWithPrefix(process.execPath, ["tools/run-worker.mjs"], { cwd: repoRoot, env: apiEnv, prefix: "worker" });
+  children.push(workerChild);
+  watchChild(workerChild);
 }
 
 const webChild = spawnWithPrefix(process.execPath, ["tools/run-web.mjs"], { cwd: repoRoot, prefix: "web" });

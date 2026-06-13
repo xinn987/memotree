@@ -13,11 +13,18 @@ import (
 
 	"memotree/server/api/internal/config"
 	"memotree/server/api/internal/httpapi"
-	"memotree/server/api/internal/storage"
 	"memotree/server/api/internal/store"
+	"memotree/server/internal/logging"
+	"memotree/server/internal/storage"
 )
 
 func main() {
+	cleanupLog, err := logging.ConfigureFromEnv("api")
+	if err != nil {
+		log.Fatalf("configure logging: %v", err)
+	}
+	defer cleanupLog()
+
 	cfg := config.Load()
 	ctx := context.Background()
 

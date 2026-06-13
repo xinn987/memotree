@@ -34,3 +34,9 @@ type ObjectInfo struct {
 	ContentType string
 	SizeBytes   int64
 }
+
+type Object struct {
+	Body        []byte
+	ContentType string
+	SizeBytes   int64
+}

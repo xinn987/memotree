@@ -1,17 +1,21 @@
 package storage
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // S3Service 通过 S3-compatible API 访问私有对象存储。
-// 业务层只依赖 Service 接口，避免 R2、MinIO 或其他云厂商细节扩散到权限逻辑中。
+// 业务层只依赖 Service 或 Worker 自己的窄接口，避免 R2、MinIO 等厂商细节扩散。
 type S3Service struct {
 	client    *s3.Client
 	presigner *s3.PresignClient
@@ -85,6 +89,71 @@ func (s *S3Service) HeadObject(ctx context.Context, bucket string, objectKey str
 		ContentType: contentType,
 		SizeBytes:   aws.ToInt64(output.ContentLength),
 	}, nil
+}
+
+func (s *S3Service) GetObject(ctx context.Context, bucket string, objectKey string) (Object, error) {
+	output, err := s.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(objectKey),
+	})
+	if err != nil {
+		return Object{}, err
+	}
+	defer output.Body.Close()
+	body, err := io.ReadAll(output.Body)
+	if err != nil {
+		return Object{}, err
+	}
+	contentType := ""
+	if output.ContentType != nil {
+		contentType = *output.ContentType
+	}
+	return Object{
+		Body:        body,
+		ContentType: contentType,
+		SizeBytes:   int64(len(body)),
+	}, nil
+}
+
+func (s *S3Service) PutObject(ctx context.Context, bucket string, objectKey string, contentType string, body []byte) (Object, error) {
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(bucket),
+		Key:         aws.String(objectKey),
+		ContentType: aws.String(contentType),
+		Body:        bytes.NewReader(body),
+	})
+	if err != nil {
+		return Object{}, err
+	}
+	return Object{
+		Body:        body,
+		ContentType: contentType,
+		SizeBytes:   int64(len(body)),
+	}, nil
+}
+
+// EnsureBucket 幂等确保 bucket 存在，供本地开发和运维初始化脚本使用。
+func (s *S3Service) EnsureBucket(ctx context.Context, bucket string) error {
+	bucket = strings.TrimSpace(bucket)
+	if bucket == "" {
+		return fmt.Errorf("bucket name is required")
+	}
+	if _, err := s.client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)}); err == nil {
+		return nil
+	}
+	_, err := s.client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(bucket)})
+	if err == nil {
+		return nil
+	}
+	var ownedByYou *types.BucketAlreadyOwnedByYou
+	if errors.As(err, &ownedByYou) {
+		return nil
+	}
+	var alreadyExists *types.BucketAlreadyExists
+	if errors.As(err, &alreadyExists) {
+		return nil
+	}
+	return err
 }
 
 func (s *S3Service) DeleteObject(ctx context.Context, bucket string, objectKey string) error {

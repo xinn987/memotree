@@ -1,17 +1,36 @@
-package config
+// init-storage 是本地开发运维命令，用于幂等创建对象存储 bucket。
+package main
 
 import (
+	"context"
+	"log"
 	"os"
-	"strconv"
 	"strings"
-	"time"
+
+	"memotree/server/devtools/internal/buckets"
+	"memotree/server/internal/storage"
 )
 
-type Config struct {
-	AppEnv              string
-	MySQLDSN            string
-	Concurrency         int
-	PollInterval        time.Duration
+func main() {
+	cfg := loadConfig()
+	ctx := context.Background()
+	s3Storage, err := storage.NewS3Service(storage.S3Config{
+		Endpoint:        cfg.StorageEndpoint,
+		Region:          cfg.StorageRegion,
+		AccessKeyID:     cfg.StorageAccessKeyID,
+		SecretAccessKey: cfg.StorageSecretKey,
+		UsePathStyle:    cfg.StorageUsePathStyle,
+	})
+	if err != nil {
+		log.Fatalf("configure storage: %v", err)
+	}
+	if err := buckets.EnsureAll(ctx, s3Storage, []string{cfg.OriginalsBucket, cfg.PreviewsBucket}); err != nil {
+		log.Fatalf("ensure storage buckets: %v", err)
+	}
+	log.Printf("storage buckets are ready: %s, %s", cfg.OriginalsBucket, cfg.PreviewsBucket)
+}
+
+type config struct {
 	StorageEndpoint     string
 	StorageRegion       string
 	StorageAccessKeyID  string
@@ -21,12 +40,8 @@ type Config struct {
 	PreviewsBucket      string
 }
 
-func Load() Config {
-	return Config{
-		AppEnv:              getEnv("APP_ENV", "local"),
-		MySQLDSN:            getEnv("MYSQL_DSN", ""),
-		Concurrency:         getEnvInt("MEDIA_WORKER_CONCURRENCY", 2),
-		PollInterval:        time.Duration(getEnvInt("MEDIA_WORKER_POLL_INTERVAL_SECONDS", 5)) * time.Second,
+func loadConfig() config {
+	return config{
 		StorageEndpoint:     getEnv("STORAGE_ENDPOINT", ""),
 		StorageRegion:       getEnv("STORAGE_REGION", "auto"),
 		StorageAccessKeyID:  getEnv("STORAGE_ACCESS_KEY_ID", ""),
@@ -42,14 +57,6 @@ func getEnv(key string, fallback string) string {
 		return value
 	}
 	return fallback
-}
-
-func getEnvInt(key string, fallback int) int {
-	value, err := strconv.Atoi(getEnv(key, ""))
-	if err != nil {
-		return fallback
-	}
-	return value
 }
 
 func getEnvBool(key string, fallback bool) bool {

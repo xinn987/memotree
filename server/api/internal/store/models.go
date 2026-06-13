@@ -62,6 +62,7 @@ var (
 	ErrNotFound      = errors.New("not found")
 	ErrAlreadyExists = errors.New("already exists")
 	ErrInvalidInvite = errors.New("invalid invite")
+	ErrInvalidUpload = errors.New("invalid upload")
 )
 
 // User 是全局唯一用户身份。
@@ -163,6 +164,15 @@ type MediaRendition struct {
 	ErrorMessage   string
 }
 
+// TimelineMedia 是时间线读取的聚合结果。
+// 它只包含已经可展示的媒体资产和预览派生资源，HTTP 层会基于 ObjectKey 再签发短期下载 URL。
+type TimelineMedia struct {
+	Asset                 MediaAsset
+	UploadedByDisplayName string
+	Thumbnail             MediaRendition
+	Display               MediaRendition
+}
+
 // UploadBatch 表示一次可返回查看的上传任务，不作为时间线浏览对象。
 // ActiveSlot 用于 MySQL 唯一键约束同一用户同一家庭最多一个 active 任务。
 type UploadBatch struct {
@@ -213,6 +223,42 @@ type CreateUploadItemInput struct {
 	ObjectKey        string
 }
 
+type CompleteUploadItemInput struct {
+	FamilyID       int64
+	BatchID        int64
+	ItemID         int64
+	UploadedBy     int64
+	ObjectSize     int64
+	ObjectType     string
+	ChecksumSHA256 string
+	Now            time.Time
+}
+
+type UpdateUploadItemStatusInput struct {
+	FamilyID     int64
+	BatchID      int64
+	ItemID       int64
+	ActorUserID  int64
+	ErrorMessage string
+	Now          time.Time
+}
+
+// ListUploadBatchesInput 表示上传任务列表查询边界。
+// IncludeFamily 为 true 时返回整个家庭任务；否则只返回 ActorUserID 创建的任务。
+type ListUploadBatchesInput struct {
+	FamilyID      int64
+	ActorUserID   int64
+	IncludeFamily bool
+	Limit         int
+}
+
+// ListTimelineMediaInput 表示时间线读取边界。
+// MVP 先只支持按家庭读取最近若干条，分页游标会在后续时间线任务中补齐。
+type ListTimelineMediaInput struct {
+	FamilyID int64
+	Limit    int
+}
+
 // Store 是 HTTP/领域逻辑访问持久化数据的唯一接口。
 // 方法保持偏业务语义，避免 handler 直接拼 SQL 或理解具体表结构。
 type Store interface {
@@ -226,9 +272,18 @@ type Store interface {
 	ListFamiliesForUser(ctx context.Context, userID int64) ([]FamilySummary, error)
 	IsActiveMember(ctx context.Context, familyID int64, userID int64) (bool, error)
 	IsActiveAdmin(ctx context.Context, familyID int64, userID int64) (bool, error)
+	ListTimelineMedia(ctx context.Context, input ListTimelineMediaInput) ([]TimelineMedia, error)
 	CreateInvite(ctx context.Context, familyID int64, tokenHash string, tokenPlaintext string, createdBy int64, memberDisplayName string, expiresAt time.Time) (FamilyInvite, error)
 	ListInvitesForFamily(ctx context.Context, familyID int64) ([]FamilyInvite, error)
 	RevokeInvite(ctx context.Context, familyID int64, inviteID int64, now time.Time) (FamilyInvite, error)
 	JoinInvite(ctx context.Context, tokenHash string, userID int64, fallbackDisplayName string, now time.Time) (FamilyMember, error)
+	FindActiveUploadBatch(ctx context.Context, familyID int64, userID int64) (UploadBatch, bool, error)
+	ListUploadBatches(ctx context.Context, input ListUploadBatchesInput) ([]UploadBatch, error)
+	FindUploadBatch(ctx context.Context, familyID int64, batchID int64) (UploadBatch, bool, error)
+	ListUploadItems(ctx context.Context, batchID int64) ([]UploadItem, error)
+	StopUploadBatch(ctx context.Context, batchID int64, now time.Time) (UploadBatch, []UploadItem, error)
+	CompleteUploadItem(ctx context.Context, input CompleteUploadItemInput) (UploadBatch, UploadItem, MediaAsset, error)
+	MarkUploadItemFailed(ctx context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error)
+	RetryUploadItem(ctx context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error)
 	CreateUploadBatch(ctx context.Context, input CreateUploadBatchInput) (UploadBatch, []UploadItem, error)
 }

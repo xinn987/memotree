@@ -172,9 +172,8 @@ Family Access 当前已经可以在本地完整测试：
 
 ## Worker
 
-Worker 还没有接媒体处理流程。需要单独启动时：
+Worker 负责轮询 MySQL 中待处理的照片媒体，生成缩略图和展示图并写入预览 bucket。普通 MySQL 开发模式会由 `node tools/dev.mjs` 自动启动；如需单独启动：
 
 ```bash
-cd server
-go run ./worker/cmd/worker
+node tools/run-worker.mjs
 ```

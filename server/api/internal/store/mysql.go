@@ -460,6 +460,664 @@ WHERE id = ?
 	return member, nil
 }
 
+// FindActiveUploadBatch 读取同一用户同一家庭中的 active 上传任务。
+// API 用它支持“再次上传时回到当前任务”的产品约束。
+func (s *MySQLStore) FindActiveUploadBatch(ctx context.Context, familyID int64, userID int64) (UploadBatch, bool, error) {
+	batch, err := scanUploadBatch(s.db.QueryRowContext(ctx, `
+SELECT id, family_id, created_by, status, active_slot, total_count, ready_count, failed_count, cancelled_count, created_at, completed_at, stopped_at
+FROM upload_batches
+WHERE family_id = ? AND created_by = ? AND active_slot = 1
+`, familyID, userID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, false, nil
+	}
+	if err != nil {
+		return UploadBatch{}, false, err
+	}
+	return batch, true, nil
+}
+
+// ListUploadBatches 按创建时间倒序返回最近上传任务。
+// IncludeFamily=false 时只返回当前用户创建的任务，用于普通成员的权限边界。
+func (s *MySQLStore) ListUploadBatches(ctx context.Context, input ListUploadBatchesInput) ([]UploadBatch, error) {
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, family_id, created_by, status, active_slot, total_count, ready_count, failed_count, cancelled_count, created_at, completed_at, stopped_at
+FROM upload_batches
+WHERE family_id = ? AND (? OR created_by = ?)
+ORDER BY created_at DESC, id DESC
+LIMIT ?
+`, input.FamilyID, input.IncludeFamily, input.ActorUserID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []UploadBatch{}
+	for rows.Next() {
+		batch, err := scanUploadBatch(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, batch)
+	}
+	return result, rows.Err()
+}
+
+// ListTimelineMedia 返回已经处理完成、可以在家庭时间线展示的媒体。
+// SQL 层只取 display 派生资源为 ready 的资产，避免主时间线混入仍在 worker 处理中的原文件。
+func (s *MySQLStore) ListTimelineMedia(ctx context.Context, input ListTimelineMediaInput) ([]TimelineMedia, error) {
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 60
+	}
+	rows, err := s.db.QueryContext(ctx, `
+SELECT
+  ma.id, ma.family_id, ma.uploaded_by, ma.media_type, ma.status, ma.rendition_status, ma.captured_at, ma.uploaded_at, ma.deleted_at,
+  COALESCE(NULLIF(fm.display_name, ''), u.display_name) AS uploaded_by_display_name,
+  d.id, d.media_asset_id, d.rendition_type, d.object_key, d.content_type, d.byte_size, d.width, d.height, d.duration_millis, d.status, d.error_message,
+  t.id, t.media_asset_id, t.rendition_type, t.object_key, t.content_type, t.byte_size, t.width, t.height, t.duration_millis, t.status, t.error_message
+FROM media_assets ma
+JOIN users u ON u.id = ma.uploaded_by
+LEFT JOIN family_members fm ON fm.family_id = ma.family_id AND fm.user_id = ma.uploaded_by
+JOIN media_renditions d ON d.media_asset_id = ma.id
+  AND d.status = ?
+  AND d.rendition_type = CASE WHEN ma.media_type = ? THEN ? ELSE ? END
+LEFT JOIN media_renditions t ON t.media_asset_id = ma.id
+  AND t.status = ?
+  AND t.rendition_type = ?
+WHERE ma.family_id = ?
+  AND ma.status = ?
+  AND ma.rendition_status = ?
+  AND ma.deleted_at IS NULL
+ORDER BY COALESCE(ma.captured_at, ma.uploaded_at) DESC, ma.id DESC
+LIMIT ?
+`,
+		RenditionStatusReady,
+		MediaTypeVideo,
+		RenditionTypeDisplayVideo,
+		RenditionTypeDisplayImage,
+		RenditionStatusReady,
+		RenditionTypeThumbnail,
+		input.FamilyID,
+		MediaStatusActive,
+		RenditionStatusReady,
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []TimelineMedia{}
+	for rows.Next() {
+		item, err := scanTimelineMedia(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, item)
+	}
+	return result, rows.Err()
+}
+
+// FindUploadBatch 按家庭和任务 ID 读取上传任务。
+// familyID 必须参与查询，避免跨家庭 ID 枚举绕过权限边界。
+func (s *MySQLStore) FindUploadBatch(ctx context.Context, familyID int64, batchID int64) (UploadBatch, bool, error) {
+	batch, err := scanUploadBatch(s.db.QueryRowContext(ctx, `
+SELECT id, family_id, created_by, status, active_slot, total_count, ready_count, failed_count, cancelled_count, created_at, completed_at, stopped_at
+FROM upload_batches
+WHERE family_id = ? AND id = ?
+`, familyID, batchID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, false, nil
+	}
+	if err != nil {
+		return UploadBatch{}, false, err
+	}
+	return batch, true, nil
+}
+
+// ListUploadItems 返回上传任务中的文件条目。
+// object_key 只用于后端存储访问，HTTP 响应层不会把它暴露给前端。
+func (s *MySQLStore) ListUploadItems(ctx context.Context, batchID int64) ([]UploadItem, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, upload_batch_id, media_asset_id, original_type, original_filename, content_type, byte_size, object_key, status, error_message, created_at, updated_at, completed_at
+FROM upload_items
+WHERE upload_batch_id = ?
+ORDER BY id ASC
+`, batchID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []UploadItem{}
+	for rows.Next() {
+		var item UploadItem
+		var mediaAssetID sql.NullInt64
+		var errorMessage sql.NullString
+		var completedAt sql.NullTime
+		if err := rows.Scan(
+			&item.ID,
+			&item.UploadBatchID,
+			&mediaAssetID,
+			&item.OriginalType,
+			&item.OriginalFilename,
+			&item.ContentType,
+			&item.ByteSize,
+			&item.ObjectKey,
+			&item.Status,
+			&errorMessage,
+			&item.CreatedAt,
+			&item.UpdatedAt,
+			&completedAt,
+		); err != nil {
+			return nil, err
+		}
+		if mediaAssetID.Valid {
+			item.MediaAssetID = mediaAssetID.Int64
+		}
+		if errorMessage.Valid {
+			item.ErrorMessage = errorMessage.String
+		}
+		if completedAt.Valid {
+			item.CompletedAt = completedAt.Time
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// StopUploadBatch 停止上传任务，并取消尚未完成的文件项。
+// 事务保证任务状态、active slot 和条目状态同时更新。
+func (s *MySQLStore) StopUploadBatch(ctx context.Context, batchID int64, now time.Time) (UploadBatch, []UploadItem, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return UploadBatch{}, nil, err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	if now.IsZero() {
+		now = time.Now()
+	}
+	var existingID int64
+	if err := tx.QueryRowContext(ctx, `SELECT id FROM upload_batches WHERE id = ? FOR UPDATE`, batchID).Scan(&existingID); errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, nil, ErrNotFound
+	} else if err != nil {
+		return UploadBatch{}, nil, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE upload_items
+SET status = ?, updated_at = ?, completed_at = ?
+WHERE upload_batch_id = ? AND status IN (?, ?, ?, ?)
+`,
+		UploadItemStatusCancelled,
+		now.UTC(),
+		now.UTC(),
+		batchID,
+		UploadItemStatusWaiting,
+		UploadItemStatusUploading,
+		UploadItemStatusUploaded,
+		UploadItemStatusProcessing,
+	); err != nil {
+		return UploadBatch{}, nil, err
+	}
+
+	var readyCount int
+	var failedCount int
+	var cancelledCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_items WHERE upload_batch_id = ? AND status = ?`, batchID, UploadItemStatusReady).Scan(&readyCount); err != nil {
+		return UploadBatch{}, nil, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_items WHERE upload_batch_id = ? AND status IN (?, ?)`, batchID, UploadItemStatusUploadFailed, UploadItemStatusProcessingFailed).Scan(&failedCount); err != nil {
+		return UploadBatch{}, nil, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_items WHERE upload_batch_id = ? AND status = ?`, batchID, UploadItemStatusCancelled).Scan(&cancelledCount); err != nil {
+		return UploadBatch{}, nil, err
+	}
+
+	if _, err := tx.ExecContext(ctx, `
+UPDATE upload_batches
+SET status = ?, active_slot = NULL, ready_count = ?, failed_count = ?, cancelled_count = ?, stopped_at = ?
+WHERE id = ?
+`, UploadBatchStatusStopped, readyCount, failedCount, cancelledCount, now.UTC(), batchID); err != nil {
+		return UploadBatch{}, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return UploadBatch{}, nil, err
+	}
+
+	batch, ok, err := s.findUploadBatchByID(ctx, batchID)
+	if err != nil {
+		return UploadBatch{}, nil, err
+	}
+	if !ok {
+		return UploadBatch{}, nil, ErrNotFound
+	}
+	items, err := s.ListUploadItems(ctx, batchID)
+	if err != nil {
+		return UploadBatch{}, nil, err
+	}
+	return batch, items, nil
+}
+
+// CompleteUploadItem 在确认对象存储已有原文件后创建媒体资产。
+// MediaAsset 只由后端在这个阶段创建，避免前端在原文件未上传前拿到时间线对象。
+func (s *MySQLStore) CompleteUploadItem(ctx context.Context, input CompleteUploadItemInput) (UploadBatch, UploadItem, MediaAsset, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	batch, err := scanUploadBatch(tx.QueryRowContext(ctx, `
+SELECT id, family_id, created_by, status, active_slot, total_count, ready_count, failed_count, cancelled_count, created_at, completed_at, stopped_at
+FROM upload_batches
+WHERE id = ? AND family_id = ? AND created_by = ?
+FOR UPDATE
+`, input.BatchID, input.FamilyID, input.UploadedBy))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, ErrNotFound
+	}
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+
+	item, err := scanUploadItem(tx.QueryRowContext(ctx, `
+SELECT id, upload_batch_id, media_asset_id, original_type, original_filename, content_type, byte_size, object_key, status, error_message, created_at, updated_at, completed_at
+FROM upload_items
+WHERE id = ? AND upload_batch_id = ?
+FOR UPDATE
+`, input.ItemID, batch.ID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, ErrNotFound
+	}
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+	if item.MediaAssetID != 0 || item.Status == UploadItemStatusCancelled {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, ErrInvalidUpload
+	}
+
+	mediaType, err := mediaTypeForOriginalType(item.OriginalType)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+	mediaResult, err := tx.ExecContext(ctx, `
+INSERT INTO media_assets (family_id, uploaded_by, media_type, status, rendition_status, uploaded_at)
+VALUES (?, ?, ?, ?, ?, ?)
+`, batch.FamilyID, batch.CreatedBy, mediaType, MediaStatusActive, RenditionStatusPending, now.UTC())
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+	mediaID, err := mediaResult.LastInsertId()
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+	byteSize := input.ObjectSize
+	if byteSize <= 0 {
+		byteSize = item.ByteSize
+	}
+	contentType := fallbackString(input.ObjectType, item.ContentType)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO media_originals (media_asset_id, original_type, object_key, original_filename, content_type, byte_size, checksum_sha256, uploaded_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`, mediaID, item.OriginalType, item.ObjectKey, item.OriginalFilename, contentType, byteSize, nullableString(input.ChecksumSHA256), now.UTC()); err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE upload_items
+SET media_asset_id = ?, status = ?, updated_at = ?
+WHERE id = ?
+`, mediaID, UploadItemStatusProcessing, now.UTC(), item.ID); err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE upload_batches
+SET status = ?
+WHERE id = ?
+`, UploadBatchStatusProcessing, batch.ID); err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+
+	batch.Status = UploadBatchStatusProcessing
+	item.MediaAssetID = mediaID
+	item.Status = UploadItemStatusProcessing
+	item.UpdatedAt = now
+	asset := MediaAsset{
+		ID:              mediaID,
+		FamilyID:        batch.FamilyID,
+		UploadedBy:      batch.CreatedBy,
+		MediaType:       mediaType,
+		Status:          MediaStatusActive,
+		RenditionStatus: RenditionStatusPending,
+		UploadedAt:      now,
+	}
+	return batch, item, asset, nil
+}
+
+// MarkUploadItemFailed 记录浏览器直传对象存储失败。
+// 失败不会创建媒体资产，只让 UploadItem 保持可重试。
+func (s *MySQLStore) MarkUploadItemFailed(ctx context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error) {
+	return s.updateUploadItemForRetry(ctx, input, func(item UploadItem, now time.Time) (UploadItem, error) {
+		if item.MediaAssetID != 0 || item.Status == UploadItemStatusProcessing || item.Status == UploadItemStatusReady || item.Status == UploadItemStatusCancelled {
+			return UploadItem{}, ErrInvalidUpload
+		}
+		item.Status = UploadItemStatusUploadFailed
+		item.ErrorMessage = input.ErrorMessage
+		item.UpdatedAt = now
+		item.CompletedAt = now
+		return item, nil
+	})
+}
+
+// RetryUploadItem 重置可重传条目，HTTP 层会基于返回条目重新签发上传 URL。
+func (s *MySQLStore) RetryUploadItem(ctx context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error) {
+	return s.updateUploadItemForRetry(ctx, input, func(item UploadItem, now time.Time) (UploadItem, error) {
+		if item.MediaAssetID != 0 || (item.Status != UploadItemStatusWaiting && item.Status != UploadItemStatusUploadFailed) {
+			return UploadItem{}, ErrInvalidUpload
+		}
+		item.Status = UploadItemStatusWaiting
+		item.ErrorMessage = ""
+		item.UpdatedAt = now
+		item.CompletedAt = time.Time{}
+		return item, nil
+	})
+}
+
+func (s *MySQLStore) updateUploadItemForRetry(
+	ctx context.Context,
+	input UpdateUploadItemStatusInput,
+	mutate func(UploadItem, time.Time) (UploadItem, error),
+) (UploadBatch, UploadItem, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	batch, err := scanUploadBatch(tx.QueryRowContext(ctx, `
+SELECT id, family_id, created_by, status, active_slot, total_count, ready_count, failed_count, cancelled_count, created_at, completed_at, stopped_at
+FROM upload_batches
+WHERE id = ? AND family_id = ? AND created_by = ?
+FOR UPDATE
+`, input.BatchID, input.FamilyID, input.ActorUserID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, UploadItem{}, ErrNotFound
+	}
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	item, err := scanUploadItem(tx.QueryRowContext(ctx, `
+SELECT id, upload_batch_id, media_asset_id, original_type, original_filename, content_type, byte_size, object_key, status, error_message, created_at, updated_at, completed_at
+FROM upload_items
+WHERE id = ? AND upload_batch_id = ?
+FOR UPDATE
+`, input.ItemID, batch.ID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, UploadItem{}, ErrNotFound
+	}
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	item, err = mutate(item, now)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	var completedAt any
+	if item.CompletedAt.IsZero() {
+		completedAt = nil
+	} else {
+		completedAt = item.CompletedAt.UTC()
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE upload_items
+SET status = ?, error_message = ?, updated_at = ?, completed_at = ?
+WHERE id = ?
+`, item.Status, nullableString(item.ErrorMessage), item.UpdatedAt.UTC(), completedAt, item.ID); err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	batch, err = recalculateUploadBatchInTx(ctx, tx, batch)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	return batch, item, nil
+}
+
+func (s *MySQLStore) findUploadBatchByID(ctx context.Context, batchID int64) (UploadBatch, bool, error) {
+	batch, err := scanUploadBatch(s.db.QueryRowContext(ctx, `
+SELECT id, family_id, created_by, status, active_slot, total_count, ready_count, failed_count, cancelled_count, created_at, completed_at, stopped_at
+FROM upload_batches
+WHERE id = ?
+`, batchID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, false, nil
+	}
+	if err != nil {
+		return UploadBatch{}, false, err
+	}
+	return batch, true, nil
+}
+
+func recalculateUploadBatchInTx(ctx context.Context, tx *sql.Tx, batch UploadBatch) (UploadBatch, error) {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_items WHERE upload_batch_id = ? AND status = ?`, batch.ID, UploadItemStatusReady).Scan(&batch.ReadyCount); err != nil {
+		return UploadBatch{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_items WHERE upload_batch_id = ? AND status IN (?, ?)`, batch.ID, UploadItemStatusUploadFailed, UploadItemStatusProcessingFailed).Scan(&batch.FailedCount); err != nil {
+		return UploadBatch{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_items WHERE upload_batch_id = ? AND status = ?`, batch.ID, UploadItemStatusCancelled).Scan(&batch.CancelledCount); err != nil {
+		return UploadBatch{}, err
+	}
+	var processingCount int
+	var pendingCount int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_items WHERE upload_batch_id = ? AND status = ?`, batch.ID, UploadItemStatusProcessing).Scan(&processingCount); err != nil {
+		return UploadBatch{}, err
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM upload_items WHERE upload_batch_id = ? AND status IN (?, ?, ?)`, batch.ID, UploadItemStatusWaiting, UploadItemStatusUploading, UploadItemStatusUploaded).Scan(&pendingCount); err != nil {
+		return UploadBatch{}, err
+	}
+	switch {
+	case batch.CancelledCount == batch.TotalCount:
+		batch.Status = UploadBatchStatusStopped
+	case batch.FailedCount > 0:
+		batch.Status = UploadBatchStatusPartiallyFailed
+	case batch.ReadyCount == batch.TotalCount && batch.TotalCount > 0:
+		batch.Status = UploadBatchStatusCompleted
+	case processingCount > 0:
+		batch.Status = UploadBatchStatusProcessing
+	case pendingCount > 0:
+		batch.Status = UploadBatchStatusCreated
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE upload_batches
+SET status = ?, ready_count = ?, failed_count = ?, cancelled_count = ?
+WHERE id = ?
+`, batch.Status, batch.ReadyCount, batch.FailedCount, batch.CancelledCount, batch.ID); err != nil {
+		return UploadBatch{}, err
+	}
+	return batch, nil
+}
+
+type uploadBatchScanner interface {
+	Scan(dest ...any) error
+}
+
+type uploadItemScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanUploadBatch(scanner uploadBatchScanner) (UploadBatch, error) {
+	var batch UploadBatch
+	var activeSlot sql.NullInt64
+	var completedAt sql.NullTime
+	var stoppedAt sql.NullTime
+	err := scanner.Scan(
+		&batch.ID,
+		&batch.FamilyID,
+		&batch.CreatedBy,
+		&batch.Status,
+		&activeSlot,
+		&batch.TotalCount,
+		&batch.ReadyCount,
+		&batch.FailedCount,
+		&batch.CancelledCount,
+		&batch.CreatedAt,
+		&completedAt,
+		&stoppedAt,
+	)
+	if err != nil {
+		return UploadBatch{}, err
+	}
+	if activeSlot.Valid {
+		batch.ActiveSlot = int(activeSlot.Int64)
+	}
+	if completedAt.Valid {
+		batch.CompletedAt = completedAt.Time
+	}
+	if stoppedAt.Valid {
+		batch.StoppedAt = stoppedAt.Time
+	}
+	return batch, nil
+}
+
+func scanUploadItem(scanner uploadItemScanner) (UploadItem, error) {
+	var item UploadItem
+	var mediaAssetID sql.NullInt64
+	var errorMessage sql.NullString
+	var completedAt sql.NullTime
+	err := scanner.Scan(
+		&item.ID,
+		&item.UploadBatchID,
+		&mediaAssetID,
+		&item.OriginalType,
+		&item.OriginalFilename,
+		&item.ContentType,
+		&item.ByteSize,
+		&item.ObjectKey,
+		&item.Status,
+		&errorMessage,
+		&item.CreatedAt,
+		&item.UpdatedAt,
+		&completedAt,
+	)
+	if err != nil {
+		return UploadItem{}, err
+	}
+	if mediaAssetID.Valid {
+		item.MediaAssetID = mediaAssetID.Int64
+	}
+	if errorMessage.Valid {
+		item.ErrorMessage = errorMessage.String
+	}
+	if completedAt.Valid {
+		item.CompletedAt = completedAt.Time
+	}
+	return item, nil
+}
+
+func scanTimelineMedia(scanner uploadItemScanner) (TimelineMedia, error) {
+	var item TimelineMedia
+	var capturedAt sql.NullTime
+	var deletedAt sql.NullTime
+	var display MediaRendition
+	var displayErrorMessage sql.NullString
+	var thumbID sql.NullInt64
+	var thumbMediaAssetID sql.NullInt64
+	var thumbRenditionType sql.NullString
+	var thumbObjectKey sql.NullString
+	var thumbContentType sql.NullString
+	var thumbByteSize sql.NullInt64
+	var thumbWidth sql.NullInt64
+	var thumbHeight sql.NullInt64
+	var thumbDurationMillis sql.NullInt64
+	var thumbStatus sql.NullString
+	var thumbErrorMessage sql.NullString
+
+	err := scanner.Scan(
+		&item.Asset.ID,
+		&item.Asset.FamilyID,
+		&item.Asset.UploadedBy,
+		&item.Asset.MediaType,
+		&item.Asset.Status,
+		&item.Asset.RenditionStatus,
+		&capturedAt,
+		&item.Asset.UploadedAt,
+		&deletedAt,
+		&item.UploadedByDisplayName,
+		&display.ID,
+		&display.MediaAssetID,
+		&display.RenditionType,
+		&display.ObjectKey,
+		&display.ContentType,
+		&display.ByteSize,
+		&display.Width,
+		&display.Height,
+		&display.DurationMillis,
+		&display.Status,
+		&displayErrorMessage,
+		&thumbID,
+		&thumbMediaAssetID,
+		&thumbRenditionType,
+		&thumbObjectKey,
+		&thumbContentType,
+		&thumbByteSize,
+		&thumbWidth,
+		&thumbHeight,
+		&thumbDurationMillis,
+		&thumbStatus,
+		&thumbErrorMessage,
+	)
+	if err != nil {
+		return TimelineMedia{}, err
+	}
+	if capturedAt.Valid {
+		item.Asset.CapturedAt = capturedAt.Time
+	}
+	if deletedAt.Valid {
+		item.Asset.DeletedAt = deletedAt.Time
+	}
+	if displayErrorMessage.Valid {
+		display.ErrorMessage = displayErrorMessage.String
+	}
+	item.Display = display
+	item.Thumbnail = display
+	if thumbID.Valid {
+		item.Thumbnail = MediaRendition{
+			ID:             thumbID.Int64,
+			MediaAssetID:   thumbMediaAssetID.Int64,
+			RenditionType:  thumbRenditionType.String,
+			ObjectKey:      thumbObjectKey.String,
+			ContentType:    thumbContentType.String,
+			ByteSize:       thumbByteSize.Int64,
+			Width:          int(thumbWidth.Int64),
+			Height:         int(thumbHeight.Int64),
+			DurationMillis: thumbDurationMillis.Int64,
+			Status:         thumbStatus.String,
+			ErrorMessage:   thumbErrorMessage.String,
+		}
+	}
+	return item, nil
+}
+
 // CreateUploadBatch 在事务中创建上传任务和文件条目。
 // active_slot=1 配合唯一键保证同一用户同一家庭最多只有一个 active 上传任务。
 func (s *MySQLStore) CreateUploadBatch(ctx context.Context, input CreateUploadBatchInput) (UploadBatch, []UploadItem, error) {

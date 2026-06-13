@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -11,8 +12,8 @@ import (
 	"time"
 
 	"memotree/server/api/internal/config"
-	"memotree/server/api/internal/storage"
 	"memotree/server/api/internal/store"
+	"memotree/server/internal/storage"
 )
 
 func TestHealthz(t *testing.T) {
@@ -163,6 +164,7 @@ func TestCreateUploadIntentRequiresActiveMembership(t *testing.T) {
 			AppEnv:              "test",
 			SessionCookieName:   "memotree_test_session",
 			OriginalsBucket:     "memotree-originals",
+			PreviewsBucket:      "memotree-previews",
 			SignedURLTTL:        15 * time.Minute,
 			UploadMaxFileBytes:  50 * 1024 * 1024,
 			UploadMaxBatchCount: 10,
@@ -219,12 +221,559 @@ func TestCreateUploadIntentRequiresActiveMembership(t *testing.T) {
 	})
 }
 
+func TestCreateUploadIntentValidatesRequestBoundaries(t *testing.T) {
+	t.Run("requires login before membership lookup", func(t *testing.T) {
+		router := NewRouterWithDependencies(
+			config.Config{AppEnv: "test", SessionCookieName: "memotree_test_session"},
+			store.NewMemoryStore(),
+			fakeStorageService{},
+		)
+
+		postJSON(t, router, nil, http.StatusUnauthorized, "/families/1/media/upload-intents", map[string]any{
+			"files": []map[string]any{
+				{"filename": "baby.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+			},
+		})
+	})
+
+	t.Run("requires configured object storage for new uploads", func(t *testing.T) {
+		router := NewRouterWithStore(config.Config{AppEnv: "test", SessionCookieName: "memotree_test_session"}, store.NewMemoryStore())
+		rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+		postJSON(t, router, rootCookie, http.StatusServiceUnavailable, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+			"files": []map[string]any{
+				{"filename": "baby.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+			},
+		})
+	})
+
+	t.Run("rejects unsupported media type", func(t *testing.T) {
+		router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+		rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+		postJSON(t, router, rootCookie, http.StatusBadRequest, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+			"files": []map[string]any{
+				{"filename": "notes.txt", "contentType": "text/plain", "byteSize": 12345},
+			},
+		})
+	})
+
+	t.Run("rejects batch count and file size limits", func(t *testing.T) {
+		router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+		rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+		postJSON(t, router, rootCookie, http.StatusBadRequest, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+			"files": []map[string]any{
+				{"filename": "1.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "2.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "3.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "4.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "5.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "6.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "7.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "8.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "9.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "10.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+				{"filename": "11.jpg", "contentType": "image/jpeg", "byteSize": 12345},
+			},
+		})
+
+		postJSON(t, router, rootCookie, http.StatusBadRequest, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+			"files": []map[string]any{
+				{"filename": "too-large.jpg", "contentType": "image/jpeg", "byteSize": 51 * 1024 * 1024},
+			},
+		})
+	})
+}
+
+func TestCreateUploadIntentResponseDoesNotExposeObjectKeyField(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	assertNoObjectKeyField(t, uploadIntent)
+}
+
+func TestCreateUploadIntentReturnsActiveBatchWhenOneAlreadyExists(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, firstIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	firstBatch := firstIntent["batch"].(map[string]any)
+
+	_, secondIntent := postJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "another.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    67890,
+			},
+		},
+	})
+	secondBatch := secondIntent["batch"].(map[string]any)
+	if secondIntent["activeExisting"] != true {
+		t.Fatalf("expected duplicate upload intent to point at existing active batch, got %#v", secondIntent)
+	}
+	if secondBatch["id"] != firstBatch["id"] || secondBatch["totalCount"] != firstBatch["totalCount"] {
+		t.Fatalf("expected existing batch response, first=%#v second=%#v", firstBatch, secondBatch)
+	}
+	if items := secondIntent["items"].([]any); len(items) != 0 {
+		t.Fatalf("expected no new upload URLs when returning existing active batch, got %#v", items)
+	}
+}
+
+func TestUploadTaskQueriesReturnActiveBatchAndItems(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	createdBatch := uploadIntent["batch"].(map[string]any)
+	batchID := int(createdBatch["id"].(float64))
+
+	_, active := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/active")
+	activeBatch := active["batch"].(map[string]any)
+	if activeBatch["id"] != createdBatch["id"] || activeBatch["status"] != store.UploadBatchStatusCreated {
+		t.Fatalf("expected active batch response, got %#v", active)
+	}
+	activeItems := active["items"].([]any)
+	if len(activeItems) != 1 {
+		t.Fatalf("expected one active upload item, got %#v", active)
+	}
+	firstItem := activeItems[0].(map[string]any)
+	if firstItem["originalFilename"] != "baby.jpg" || firstItem["status"] != store.UploadItemStatusWaiting {
+		t.Fatalf("unexpected active upload item: %#v", firstItem)
+	}
+	assertNoObjectKeyField(t, active)
+
+	_, detail := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID))
+	detailBatch := detail["batch"].(map[string]any)
+	if detailBatch["id"] != createdBatch["id"] {
+		t.Fatalf("expected upload detail for batch %d, got %#v", batchID, detail)
+	}
+	assertNoObjectKeyField(t, detail)
+}
+
+func TestUploadTaskQueriesEnforceOwnerAndAdminAccess(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	adminCookie, familyID := createSignedInFamily(t, router, "root")
+	memberCookie := joinFamilyWithInvite(t, router, adminCookie, familyID, "grandma")
+	guestCookie, _ := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "guest",
+		"password":    "secret123",
+		"displayName": "访客",
+	})
+
+	_, memberIntent := postJSON(t, router, memberCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "grandma.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	memberBatch := memberIntent["batch"].(map[string]any)
+	memberBatchID := int(memberBatch["id"].(float64))
+
+	getJSON(t, router, memberCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(memberBatchID))
+	getJSON(t, router, adminCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(memberBatchID))
+	getJSON(t, router, guestCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/uploads/active")
+	getJSON(t, router, guestCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/uploads/"+itoa(memberBatchID))
+}
+
+func TestUploadTaskActiveQueryReturnsEmptyWhenNoActiveBatch(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, active := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/active")
+	if active["batch"] != nil {
+		t.Fatalf("expected no active batch, got %#v", active)
+	}
+	items := active["items"].([]any)
+	if len(items) != 0 {
+		t.Fatalf("expected empty item array, got %#v", active)
+	}
+}
+
+func TestStopUploadTaskCancelsUnfinishedItemsAndClearsActiveSlot(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	batch := uploadIntent["batch"].(map[string]any)
+	batchID := int(batch["id"].(float64))
+
+	_, stopped := postJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/stop", map[string]any{})
+	stoppedBatch := stopped["batch"].(map[string]any)
+	if stoppedBatch["status"] != store.UploadBatchStatusStopped || stoppedBatch["cancelledCount"] != float64(1) {
+		t.Fatalf("expected stopped batch with cancelled item, got %#v", stopped)
+	}
+	items := stopped["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["status"] != store.UploadItemStatusCancelled {
+		t.Fatalf("expected cancelled upload item, got %#v", stopped)
+	}
+
+	_, active := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/active")
+	if active["batch"] != nil {
+		t.Fatalf("expected stopped task to leave no active batch, got %#v", active)
+	}
+}
+
+func TestRecentUploadTasksReturnStoppedTaskAfterActiveSlotCleared(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	batch := uploadIntent["batch"].(map[string]any)
+	batchID := int(batch["id"].(float64))
+
+	postJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/stop", map[string]any{})
+
+	_, active := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/active")
+	if active["batch"] != nil {
+		t.Fatalf("expected stopped task to be absent from active query, got %#v", active)
+	}
+
+	_, recent := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/recent")
+	tasks := recent["tasks"].([]any)
+	if len(tasks) != 1 {
+		t.Fatalf("expected stopped task in recent uploads, got %#v", recent)
+	}
+	recentTask := tasks[0].(map[string]any)
+	recentBatch := recentTask["batch"].(map[string]any)
+	if recentBatch["id"] != float64(batchID) || recentBatch["status"] != store.UploadBatchStatusStopped {
+		t.Fatalf("expected stopped batch in recent uploads, got %#v", recentTask)
+	}
+	items := recentTask["items"].([]any)
+	if len(items) != 1 || items[0].(map[string]any)["status"] != store.UploadItemStatusCancelled {
+		t.Fatalf("expected recent task to include cancelled item, got %#v", recentTask)
+	}
+	assertNoObjectKeyField(t, recent)
+}
+
+func TestRecentUploadTasksEnforceMemberAndAdminVisibility(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	adminCookie, familyID := createSignedInFamily(t, router, "root")
+	memberCookie := joinFamilyWithInvite(t, router, adminCookie, familyID, "grandma")
+	otherMemberCookie := joinFamilyWithInvite(t, router, adminCookie, familyID, "grandpa")
+	guestCookie, _ := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "guest",
+		"password":    "secret123",
+		"displayName": "guest",
+	})
+
+	_, memberIntent := postJSON(t, router, memberCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "grandma.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	memberBatchID := int(memberIntent["batch"].(map[string]any)["id"].(float64))
+
+	_, adminRecent := getJSON(t, router, adminCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/recent")
+	adminTasks := adminRecent["tasks"].([]any)
+	if len(adminTasks) != 1 || adminTasks[0].(map[string]any)["batch"].(map[string]any)["id"] != float64(memberBatchID) {
+		t.Fatalf("expected admin to see member upload task, got %#v", adminRecent)
+	}
+
+	_, otherRecent := getJSON(t, router, otherMemberCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/recent")
+	if tasks := otherRecent["tasks"].([]any); len(tasks) != 0 {
+		t.Fatalf("expected member to see only own upload tasks, got %#v", otherRecent)
+	}
+	getJSON(t, router, guestCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/uploads/recent")
+}
+
+func TestTimelineReturnsReadyMediaGroupsWithSignedPreviewURLs(t *testing.T) {
+	appStore := &timelineStore{MemoryStore: store.NewMemoryStore()}
+	router := newUploadTestRouter(appStore, fakeStorageService{})
+
+	rootCookie, rootUser := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "root",
+		"password":    "secret123",
+		"displayName": "妈妈账号",
+	})
+	_, family := postJSON(t, router, rootCookie, http.StatusCreated, "/families", map[string]string{
+		"displayName": "小树之家",
+	})
+	familyID := int64(family["id"].(float64))
+	rootUserID := int64(rootUser["id"].(float64))
+	appStore.rows = []store.TimelineMedia{
+		{
+			Asset: store.MediaAsset{
+				ID:              7,
+				FamilyID:        familyID,
+				UploadedBy:      rootUserID,
+				MediaType:       store.MediaTypePhoto,
+				Status:          store.MediaStatusActive,
+				RenditionStatus: store.RenditionStatusReady,
+				CapturedAt:      time.Date(2026, 6, 13, 9, 30, 0, 0, time.UTC),
+				UploadedAt:      time.Date(2026, 6, 13, 9, 35, 0, 0, time.UTC),
+			},
+			UploadedByDisplayName: "妈妈",
+			Thumbnail: store.MediaRendition{
+				RenditionType: store.RenditionTypeThumbnail,
+				ObjectKey:     "previews/families/1/thumb.jpg",
+				ContentType:   "image/jpeg",
+				Width:         360,
+				Height:        240,
+				Status:        store.RenditionStatusReady,
+			},
+			Display: store.MediaRendition{
+				RenditionType: store.RenditionTypeDisplayImage,
+				ObjectKey:     "previews/families/1/display.jpg",
+				ContentType:   "image/jpeg",
+				Width:         1600,
+				Height:        1067,
+				Status:        store.RenditionStatusReady,
+			},
+		},
+	}
+
+	_, timeline := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(int(familyID))+"/timeline")
+	groups := timeline["groups"].([]any)
+	if len(groups) != 1 {
+		t.Fatalf("expected one timeline group, got %#v", timeline)
+	}
+	group := groups[0].(map[string]any)
+	if group["date"] != "2026-06-13" || group["month"] != "2026-06" {
+		t.Fatalf("unexpected timeline group key: %#v", group)
+	}
+	items := group["items"].([]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one timeline item, got %#v", group)
+	}
+	item := items[0].(map[string]any)
+	display := item["display"].(map[string]any)
+	thumbnail := item["thumbnail"].(map[string]any)
+	if item["id"] != float64(7) || display["url"] != "https://storage.example/download/previews/families/1/display.jpg" || thumbnail["url"] != "https://storage.example/download/previews/families/1/thumb.jpg" {
+		t.Fatalf("unexpected timeline item response: %#v", item)
+	}
+	assertNoObjectKeyField(t, timeline)
+
+	guestCookie, _ := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "guest",
+		"password":    "secret123",
+		"displayName": "访客",
+	})
+	getJSON(t, router, guestCookie, http.StatusForbidden, "/families/"+itoa(int(familyID))+"/timeline")
+}
+
+func TestStopUploadTaskEnforcesOwnerAndAdminAccess(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	adminCookie, familyID := createSignedInFamily(t, router, "root")
+	memberCookie := joinFamilyWithInvite(t, router, adminCookie, familyID, "grandma")
+	otherMemberCookie := joinFamilyWithInvite(t, router, adminCookie, familyID, "grandpa")
+	guestCookie, _ := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "guest",
+		"password":    "secret123",
+		"displayName": "访客",
+	})
+
+	_, memberIntent := postJSON(t, router, memberCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "grandma.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	memberBatch := memberIntent["batch"].(map[string]any)
+	memberBatchID := int(memberBatch["id"].(float64))
+
+	postJSON(t, router, otherMemberCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/uploads/"+itoa(memberBatchID)+"/stop", map[string]any{})
+	postJSON(t, router, guestCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/uploads/"+itoa(memberBatchID)+"/stop", map[string]any{})
+	postJSON(t, router, adminCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(memberBatchID)+"/stop", map[string]any{})
+}
+
+func TestCompleteUploadItemCreatesMediaAndMovesItemToProcessing(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	batch := uploadIntent["batch"].(map[string]any)
+	items := uploadIntent["items"].([]any)
+	batchID := int(batch["id"].(float64))
+	itemID := int(items[0].(map[string]any)["id"].(float64))
+
+	_, completed := postJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/items/"+itoa(itemID)+"/complete-upload", map[string]any{})
+	completedBatch := completed["batch"].(map[string]any)
+	if completedBatch["status"] != store.UploadBatchStatusProcessing {
+		t.Fatalf("expected batch to move to processing, got %#v", completed)
+	}
+	completedItem := completed["item"].(map[string]any)
+	if completedItem["status"] != store.UploadItemStatusProcessing || completedItem["mediaAssetId"] == nil {
+		t.Fatalf("expected completed item to have processing status and mediaAssetId, got %#v", completed)
+	}
+	mediaAsset := completed["mediaAsset"].(map[string]any)
+	if mediaAsset["mediaType"] != store.MediaTypePhoto || mediaAsset["renditionStatus"] != store.RenditionStatusPending {
+		t.Fatalf("expected pending photo media asset, got %#v", completed)
+	}
+	assertNoObjectKeyField(t, completed)
+
+	_, detail := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID))
+	detailItems := detail["items"].([]any)
+	if detailItems[0].(map[string]any)["mediaAssetId"] == nil {
+		t.Fatalf("expected upload task detail to include mediaAssetId after completion, got %#v", detail)
+	}
+}
+
+func TestCompleteUploadItemFailsWhenObjectIsMissing(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), missingObjectStorage{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	batch := uploadIntent["batch"].(map[string]any)
+	items := uploadIntent["items"].([]any)
+	batchID := int(batch["id"].(float64))
+	itemID := int(items[0].(map[string]any)["id"].(float64))
+
+	postJSON(t, router, rootCookie, http.StatusConflict, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/items/"+itoa(itemID)+"/complete-upload", map[string]any{})
+}
+
+func TestFailAndRetryUploadItem(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	batch := uploadIntent["batch"].(map[string]any)
+	items := uploadIntent["items"].([]any)
+	batchID := int(batch["id"].(float64))
+	itemID := int(items[0].(map[string]any)["id"].(float64))
+
+	_, failed := postJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/items/"+itoa(itemID)+"/fail-upload", map[string]string{
+		"errorMessage": "network interrupted",
+	})
+	failedBatch := failed["batch"].(map[string]any)
+	if failedBatch["status"] != store.UploadBatchStatusPartiallyFailed || failedBatch["failedCount"] != float64(1) {
+		t.Fatalf("expected partially failed batch, got %#v", failed)
+	}
+	failedItem := failed["item"].(map[string]any)
+	if failedItem["status"] != store.UploadItemStatusUploadFailed || failedItem["errorMessage"] != "network interrupted" {
+		t.Fatalf("expected upload_failed item, got %#v", failed)
+	}
+
+	_, retry := postJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/items/"+itoa(itemID)+"/retry-upload", map[string]any{})
+	retryBatch := retry["batch"].(map[string]any)
+	if retryBatch["failedCount"] != float64(0) || retryBatch["status"] != store.UploadBatchStatusCreated {
+		t.Fatalf("expected retry to clear failure count and reset batch, got %#v", retry)
+	}
+	retryItem := retry["item"].(map[string]any)
+	if retryItem["status"] != store.UploadItemStatusWaiting || retryItem["errorMessage"] != "" || retryItem["uploadUrl"] == "" {
+		t.Fatalf("expected retry response with fresh uploadUrl and waiting item, got %#v", retry)
+	}
+}
+
+func TestRetryUploadItemRejectsAlreadyProcessingItem(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	batch := uploadIntent["batch"].(map[string]any)
+	items := uploadIntent["items"].([]any)
+	batchID := int(batch["id"].(float64))
+	itemID := int(items[0].(map[string]any)["id"].(float64))
+
+	postJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/items/"+itoa(itemID)+"/complete-upload", map[string]any{})
+	postJSON(t, router, rootCookie, http.StatusConflict, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/items/"+itoa(itemID)+"/retry-upload", map[string]any{})
+}
+
 type nilFamiliesStore struct {
 	*store.MemoryStore
 }
 
 func (s nilFamiliesStore) ListFamiliesForUser(_ context.Context, _ int64) ([]store.FamilySummary, error) {
 	return nil, nil
+}
+
+type timelineStore struct {
+	*store.MemoryStore
+	rows []store.TimelineMedia
+}
+
+func (s *timelineStore) ListTimelineMedia(_ context.Context, input store.ListTimelineMediaInput) ([]store.TimelineMedia, error) {
+	result := []store.TimelineMedia{}
+	for _, row := range s.rows {
+		if row.Asset.FamilyID == input.FamilyID {
+			result = append(result, row)
+		}
+	}
+	return result, nil
 }
 
 func postJSON(t *testing.T, router http.Handler, cookie *http.Cookie, expectedStatus int, path string, payload any) (*http.Cookie, map[string]any) {
@@ -301,6 +850,67 @@ func deleteJSON(t *testing.T, router http.Handler, cookie *http.Cookie, expected
 	return cookie, decoded
 }
 
+func newUploadTestRouter(appStore store.Store, storageService storage.Service) http.Handler {
+	return NewRouterWithDependencies(
+		config.Config{
+			AppEnv:              "test",
+			SessionCookieName:   "memotree_test_session",
+			OriginalsBucket:     "memotree-originals",
+			PreviewsBucket:      "memotree-previews",
+			SignedURLTTL:        15 * time.Minute,
+			UploadMaxFileBytes:  50 * 1024 * 1024,
+			UploadMaxBatchCount: 10,
+		},
+		appStore,
+		storageService,
+	)
+}
+
+func createSignedInFamily(t *testing.T, router http.Handler, loginName string) (*http.Cookie, int) {
+	t.Helper()
+	cookie, _ := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   loginName,
+		"password":    "secret123",
+		"displayName": "初始管理员",
+	})
+	_, family := postJSON(t, router, cookie, http.StatusCreated, "/families", map[string]string{
+		"displayName": "小树之家",
+	})
+	return cookie, int(family["id"].(float64))
+}
+
+func joinFamilyWithInvite(t *testing.T, router http.Handler, adminCookie *http.Cookie, familyID int, loginName string) *http.Cookie {
+	t.Helper()
+	_, invite := postJSON(t, router, adminCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/invites", map[string]string{
+		"memberDisplayName": loginName,
+	})
+	token := invite["token"].(string)
+	memberCookie, _ := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   loginName,
+		"password":    "secret123",
+		"displayName": loginName,
+	})
+	postJSON(t, router, memberCookie, http.StatusOK, "/invites/"+token+"/join", map[string]string{})
+	return memberCookie
+}
+
+func assertNoObjectKeyField(t *testing.T, value any) {
+	t.Helper()
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if key == "objectKey" {
+				t.Fatalf("response should not expose objectKey field: %#v", value)
+			}
+			assertNoObjectKeyField(t, child)
+		}
+	case []any:
+		for _, child := range typed {
+			assertNoObjectKeyField(t, child)
+		}
+	}
+}
+
 func itoa(value int) string {
 	return strconv.Itoa(value)
 }
@@ -316,9 +926,17 @@ func (fakeStorageService) GetSignedDownloadURL(_ context.Context, request storag
 }
 
 func (fakeStorageService) HeadObject(_ context.Context, bucket string, objectKey string) (storage.ObjectInfo, error) {
-	return storage.ObjectInfo{Bucket: bucket, ObjectKey: objectKey}, nil
+	return storage.ObjectInfo{Bucket: bucket, ObjectKey: objectKey, ContentType: "image/jpeg", SizeBytes: 12345}, nil
 }
 
 func (fakeStorageService) DeleteObject(_ context.Context, _ string, _ string) error {
 	return nil
+}
+
+type missingObjectStorage struct {
+	fakeStorageService
+}
+
+func (missingObjectStorage) HeadObject(_ context.Context, _ string, objectKey string) (storage.ObjectInfo, error) {
+	return storage.ObjectInfo{}, fmt.Errorf("object %s not found", objectKey)
 }

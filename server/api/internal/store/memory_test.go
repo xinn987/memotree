@@ -92,3 +92,69 @@ func TestMemoryStoreCreateUploadBatch(t *testing.T) {
 		t.Fatalf("expected duplicate active upload batch to fail, got %v", err)
 	}
 }
+
+func TestMemoryStoreListTimelineMediaReturnsOnlyReadyActiveAssets(t *testing.T) {
+	ctx := context.Background()
+	memoryStore := NewMemoryStore()
+
+	root, err := memoryStore.CreateUser(ctx, "root", "hash", "初始管理员")
+	if err != nil {
+		t.Fatalf("create root user: %v", err)
+	}
+	family, err := memoryStore.CreateFamily(ctx, "小树之家", DefaultFamilyTimezone, root.ID, "妈妈")
+	if err != nil {
+		t.Fatalf("create family: %v", err)
+	}
+	olderUploadedAt := time.Date(2026, 6, 12, 9, 0, 0, 0, time.UTC)
+	newerCapturedAt := time.Date(2026, 6, 13, 8, 30, 0, 0, time.UTC)
+
+	memoryStore.mu.Lock()
+	memoryStore.mediaAssets[1] = MediaAsset{
+		ID:              1,
+		FamilyID:        family.ID,
+		UploadedBy:      root.ID,
+		MediaType:       MediaTypePhoto,
+		Status:          MediaStatusActive,
+		RenditionStatus: RenditionStatusReady,
+		UploadedAt:      olderUploadedAt,
+	}
+	memoryStore.mediaAssets[2] = MediaAsset{
+		ID:              2,
+		FamilyID:        family.ID,
+		UploadedBy:      root.ID,
+		MediaType:       MediaTypePhoto,
+		Status:          MediaStatusActive,
+		RenditionStatus: RenditionStatusReady,
+		CapturedAt:      newerCapturedAt,
+		UploadedAt:      olderUploadedAt,
+	}
+	memoryStore.mediaAssets[3] = MediaAsset{
+		ID:              3,
+		FamilyID:        family.ID,
+		UploadedBy:      root.ID,
+		MediaType:       MediaTypePhoto,
+		Status:          MediaStatusActive,
+		RenditionStatus: RenditionStatusProcessing,
+		UploadedAt:      newerCapturedAt,
+	}
+	memoryStore.mediaRenditions[1] = MediaRendition{ID: 1, MediaAssetID: 1, RenditionType: RenditionTypeDisplayImage, ObjectKey: "previews/older-display.jpg", Status: RenditionStatusReady}
+	memoryStore.mediaRenditions[2] = MediaRendition{ID: 2, MediaAssetID: 1, RenditionType: RenditionTypeThumbnail, ObjectKey: "previews/older-thumb.jpg", Status: RenditionStatusReady}
+	memoryStore.mediaRenditions[3] = MediaRendition{ID: 3, MediaAssetID: 2, RenditionType: RenditionTypeDisplayImage, ObjectKey: "previews/newer-display.jpg", Status: RenditionStatusReady}
+	memoryStore.mediaRenditions[4] = MediaRendition{ID: 4, MediaAssetID: 2, RenditionType: RenditionTypeThumbnail, ObjectKey: "previews/newer-thumb.jpg", Status: RenditionStatusReady}
+	memoryStore.mediaRenditions[5] = MediaRendition{ID: 5, MediaAssetID: 3, RenditionType: RenditionTypeDisplayImage, ObjectKey: "previews/processing-display.jpg", Status: RenditionStatusReady}
+	memoryStore.mu.Unlock()
+
+	items, err := memoryStore.ListTimelineMedia(ctx, ListTimelineMediaInput{FamilyID: family.ID, Limit: 20})
+	if err != nil {
+		t.Fatalf("list timeline media: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected only ready active assets, got %#v", items)
+	}
+	if items[0].Asset.ID != 2 || items[1].Asset.ID != 1 {
+		t.Fatalf("expected captured/uploaded time descending order, got %#v", items)
+	}
+	if items[0].UploadedByDisplayName != "妈妈" || items[0].Display.ObjectKey != "previews/newer-display.jpg" || items[0].Thumbnail.ObjectKey != "previews/newer-thumb.jpg" {
+		t.Fatalf("unexpected timeline row: %#v", items[0])
+	}
+}

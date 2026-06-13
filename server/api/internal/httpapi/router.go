@@ -18,8 +18,8 @@ import (
 
 	"memotree/server/api/internal/auth"
 	"memotree/server/api/internal/config"
-	"memotree/server/api/internal/storage"
 	"memotree/server/api/internal/store"
+	"memotree/server/internal/storage"
 )
 
 type app struct {
@@ -67,11 +67,19 @@ func NewRouterWithDependencies(cfg config.Config, appStore store.Store, storageS
 	mux.HandleFunc("GET /auth/session", api.currentSession)
 	mux.HandleFunc("POST /families", api.requireAuth(api.createFamily))
 	mux.HandleFunc("GET /families", api.requireAuth(api.listFamilies))
+	mux.HandleFunc("GET /families/{familyId}/timeline", api.requireAuth(api.listTimeline))
 	mux.HandleFunc("POST /families/{familyId}/invites", api.requireAuth(api.createInvite))
 	mux.HandleFunc("GET /families/{familyId}/invites", api.requireAuth(api.listInvites))
 	mux.HandleFunc("DELETE /families/{familyId}/invites/{inviteId}", api.requireAuth(api.revokeInvite))
 	mux.HandleFunc("POST /invites/{token}/join", api.requireAuth(api.joinInvite))
 	mux.HandleFunc("POST /families/{familyId}/media/upload-intents", api.requireAuth(api.createUploadIntents))
+	mux.HandleFunc("GET /families/{familyId}/uploads/active", api.requireAuth(api.getActiveUploadBatch))
+	mux.HandleFunc("GET /families/{familyId}/uploads/recent", api.requireAuth(api.listRecentUploadBatches))
+	mux.HandleFunc("GET /families/{familyId}/uploads/{batchId}", api.requireAuth(api.getUploadBatch))
+	mux.HandleFunc("POST /families/{familyId}/uploads/{batchId}/stop", api.requireAuth(api.stopUploadBatch))
+	mux.HandleFunc("POST /families/{familyId}/uploads/{batchId}/items/{itemId}/complete-upload", api.requireAuth(api.completeUploadItem))
+	mux.HandleFunc("POST /families/{familyId}/uploads/{batchId}/items/{itemId}/fail-upload", api.requireAuth(api.failUploadItem))
+	mux.HandleFunc("POST /families/{familyId}/uploads/{batchId}/items/{itemId}/retry-upload", api.requireAuth(api.retryUploadItem))
 	return withRequestLog(mux)
 }
 
@@ -347,6 +355,43 @@ func (a *app) joinInvite(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *app) listTimeline(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以查看时间线")
+		return
+	}
+	if a.storage == nil {
+		writeError(w, http.StatusServiceUnavailable, "对象存储尚未配置")
+		return
+	}
+
+	items, err := a.store.ListTimelineMedia(r.Context(), store.ListTimelineMediaInput{
+		FamilyID: familyID,
+		Limit:    60,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取时间线失败")
+		return
+	}
+	response, err := a.timelineResponse(r.Context(), items)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "生成预览访问链接失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
 func (a *app) createUploadIntents(w http.ResponseWriter, r *http.Request) {
 	current := currentUser(r)
 	familyID, err := parsePathID(r, "familyId")
@@ -361,6 +406,19 @@ func (a *app) createUploadIntents(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isMember {
 		writeError(w, http.StatusForbidden, "只有家庭成员可以上传媒体")
+		return
+	}
+	activeBatch, hasActiveBatch, err := a.store.FindActiveUploadBatch(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传任务失败")
+		return
+	}
+	if hasActiveBatch {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"activeExisting": true,
+			"batch":          uploadBatchResponse(activeBatch),
+			"items":          []map[string]any{},
+		})
 		return
 	}
 	if a.storage == nil {
@@ -434,6 +492,14 @@ func (a *app) createUploadIntents(w http.ResponseWriter, r *http.Request) {
 		Now:       now,
 	})
 	if errors.Is(err, store.ErrAlreadyExists) {
+		if activeBatch, ok, findErr := a.store.FindActiveUploadBatch(r.Context(), familyID, current.ID); findErr == nil && ok {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"activeExisting": true,
+				"batch":          uploadBatchResponse(activeBatch),
+				"items":          []map[string]any{},
+			})
+			return
+		}
 		writeError(w, http.StatusConflict, "当前家庭已有进行中的上传任务")
 		return
 	}
@@ -468,15 +534,434 @@ func (a *app) createUploadIntents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"batch": map[string]any{
-			"id":         batch.ID,
-			"familyId":   batch.FamilyID,
-			"status":     batch.Status,
-			"totalCount": batch.TotalCount,
-			"createdAt":  batch.CreatedAt.Format(time.RFC3339),
-		},
-		"items": responseItems,
+		"activeExisting": false,
+		"batch":          uploadBatchResponse(batch),
+		"items":          responseItems,
 	})
+}
+
+func (a *app) getActiveUploadBatch(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以查看上传任务")
+		return
+	}
+
+	batch, ok, err := a.store.FindActiveUploadBatch(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传任务失败")
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"batch": nil,
+			"items": []map[string]any{},
+		})
+		return
+	}
+	items, err := a.store.ListUploadItems(r.Context(), batch.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传文件列表失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, uploadTaskResponse(batch, items))
+}
+
+func (a *app) listRecentUploadBatches(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以查看上传任务")
+		return
+	}
+	isAdmin, err := a.store.IsActiveAdmin(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+
+	// 最近任务用于刷新后恢复上传管理入口；管理员查看家庭范围，普通成员只看自己的任务。
+	batches, err := a.store.ListUploadBatches(r.Context(), store.ListUploadBatchesInput{
+		FamilyID:      familyID,
+		ActorUserID:   current.ID,
+		IncludeFamily: isAdmin,
+		Limit:         20,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传任务列表失败")
+		return
+	}
+	tasks := make([]map[string]any, 0, len(batches))
+	for _, batch := range batches {
+		items, err := a.store.ListUploadItems(r.Context(), batch.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "读取上传文件列表失败")
+			return
+		}
+		tasks = append(tasks, uploadTaskResponse(batch, items))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+}
+
+func (a *app) getUploadBatch(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	batchID, err := parsePathID(r, "batchId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "上传任务 ID 不合法")
+		return
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以查看上传任务")
+		return
+	}
+
+	batch, ok, err := a.store.FindUploadBatch(r.Context(), familyID, batchID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传任务失败")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "上传任务不存在")
+		return
+	}
+	if batch.CreatedBy != current.ID {
+		isAdmin, err := a.store.IsActiveAdmin(r.Context(), familyID, current.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+			return
+		}
+		if !isAdmin {
+			writeError(w, http.StatusForbidden, "只能查看自己的上传任务")
+			return
+		}
+	}
+
+	items, err := a.store.ListUploadItems(r.Context(), batch.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传文件列表失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, uploadTaskResponse(batch, items))
+}
+
+func (a *app) stopUploadBatch(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	batchID, err := parsePathID(r, "batchId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "上传任务 ID 不合法")
+		return
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以停止上传任务")
+		return
+	}
+
+	batch, ok, err := a.store.FindUploadBatch(r.Context(), familyID, batchID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传任务失败")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "上传任务不存在")
+		return
+	}
+	if batch.CreatedBy != current.ID {
+		isAdmin, err := a.store.IsActiveAdmin(r.Context(), familyID, current.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+			return
+		}
+		if !isAdmin {
+			writeError(w, http.StatusForbidden, "只能停止自己的上传任务")
+			return
+		}
+	}
+
+	stopped, items, err := a.store.StopUploadBatch(r.Context(), batch.ID, a.now())
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "上传任务不存在")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "停止上传任务失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, uploadTaskResponse(stopped, items))
+}
+
+func (a *app) completeUploadItem(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	batchID, err := parsePathID(r, "batchId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "上传任务 ID 不合法")
+		return
+	}
+	itemID, err := parsePathID(r, "itemId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "上传文件 ID 不合法")
+		return
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以完成上传")
+		return
+	}
+	if a.storage == nil {
+		writeError(w, http.StatusServiceUnavailable, "对象存储尚未配置")
+		return
+	}
+
+	batch, ok, err := a.store.FindUploadBatch(r.Context(), familyID, batchID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传任务失败")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "上传任务不存在")
+		return
+	}
+	if batch.CreatedBy != current.ID {
+		isAdmin, err := a.store.IsActiveAdmin(r.Context(), familyID, current.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+			return
+		}
+		if !isAdmin {
+			writeError(w, http.StatusForbidden, "只能完成自己的上传文件")
+			return
+		}
+	}
+
+	item, ok, err := a.findUploadItem(r.Context(), batch.ID, itemID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传文件失败")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "上传文件不存在")
+		return
+	}
+	objectInfo, err := a.storage.HeadObject(r.Context(), a.cfg.OriginalsBucket, item.ObjectKey)
+	if err != nil {
+		writeError(w, http.StatusConflict, "原文件尚未上传完成")
+		return
+	}
+	if objectInfo.SizeBytes > 0 && objectInfo.SizeBytes != item.ByteSize {
+		writeError(w, http.StatusConflict, "原文件大小和上传任务不一致")
+		return
+	}
+
+	updatedBatch, updatedItem, mediaAsset, err := a.store.CompleteUploadItem(r.Context(), store.CompleteUploadItemInput{
+		FamilyID:   familyID,
+		BatchID:    batch.ID,
+		ItemID:     item.ID,
+		UploadedBy: batch.CreatedBy,
+		ObjectSize: objectInfo.SizeBytes,
+		ObjectType: objectInfo.ContentType,
+		Now:        a.now(),
+	})
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "上传文件不存在")
+		return
+	case errors.Is(err, store.ErrInvalidUpload):
+		writeError(w, http.StatusConflict, "上传文件状态不允许完成")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "完成上传失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"batch":      uploadBatchResponse(updatedBatch),
+		"item":       uploadItemResponse(updatedItem),
+		"mediaAsset": mediaAssetResponse(mediaAsset),
+	})
+}
+
+func (a *app) failUploadItem(w http.ResponseWriter, r *http.Request) {
+	current, familyID, batch, itemID, ok := a.resolveUploadItemAction(w, r, "只能标记自己的上传文件失败")
+	if !ok {
+		return
+	}
+	var input struct {
+		ErrorMessage string `json:"errorMessage"`
+	}
+	if !readJSON(w, r, &input) {
+		return
+	}
+	updatedBatch, updatedItem, err := a.store.MarkUploadItemFailed(r.Context(), store.UpdateUploadItemStatusInput{
+		FamilyID:     familyID,
+		BatchID:      batch.ID,
+		ItemID:       itemID,
+		ActorUserID:  current.ID,
+		ErrorMessage: strings.TrimSpace(input.ErrorMessage),
+		Now:          a.now(),
+	})
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "上传文件不存在")
+		return
+	case errors.Is(err, store.ErrInvalidUpload):
+		writeError(w, http.StatusConflict, "上传文件状态不允许标记失败")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "标记上传失败失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"batch": uploadBatchResponse(updatedBatch),
+		"item":  uploadItemResponse(updatedItem),
+	})
+}
+
+func (a *app) retryUploadItem(w http.ResponseWriter, r *http.Request) {
+	current, familyID, batch, itemID, ok := a.resolveUploadItemAction(w, r, "只能重试自己的上传文件")
+	if !ok {
+		return
+	}
+	if a.storage == nil {
+		writeError(w, http.StatusServiceUnavailable, "对象存储尚未配置")
+		return
+	}
+	updatedBatch, updatedItem, err := a.store.RetryUploadItem(r.Context(), store.UpdateUploadItemStatusInput{
+		FamilyID:    familyID,
+		BatchID:     batch.ID,
+		ItemID:      itemID,
+		ActorUserID: current.ID,
+		Now:         a.now(),
+	})
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "上传文件不存在")
+		return
+	case errors.Is(err, store.ErrInvalidUpload):
+		writeError(w, http.StatusConflict, "上传文件状态不允许重试")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "重试上传失败")
+		return
+	}
+	uploadURL, err := a.storage.GetSignedUploadURL(r.Context(), storage.SignedURLRequest{
+		Bucket:      a.cfg.OriginalsBucket,
+		ObjectKey:   updatedItem.ObjectKey,
+		ContentType: updatedItem.ContentType,
+		ExpiresIn:   a.cfg.SignedURLTTL,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "生成上传授权失败")
+		return
+	}
+	item := uploadItemResponse(updatedItem)
+	item["uploadUrl"] = uploadURL
+	item["method"] = http.MethodPut
+	item["expiresAt"] = a.now().Add(a.cfg.SignedURLTTL).Format(time.RFC3339)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"batch": uploadBatchResponse(updatedBatch),
+		"item":  item,
+	})
+}
+
+func (a *app) resolveUploadItemAction(w http.ResponseWriter, r *http.Request, ownerError string) (store.User, int64, store.UploadBatch, int64, bool) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return store.User{}, 0, store.UploadBatch{}, 0, false
+	}
+	batchID, err := parsePathID(r, "batchId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "上传任务 ID 不合法")
+		return store.User{}, 0, store.UploadBatch{}, 0, false
+	}
+	itemID, err := parsePathID(r, "itemId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "上传文件 ID 不合法")
+		return store.User{}, 0, store.UploadBatch{}, 0, false
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return store.User{}, 0, store.UploadBatch{}, 0, false
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以操作上传文件")
+		return store.User{}, 0, store.UploadBatch{}, 0, false
+	}
+	batch, ok, err := a.store.FindUploadBatch(r.Context(), familyID, batchID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传任务失败")
+		return store.User{}, 0, store.UploadBatch{}, 0, false
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "上传任务不存在")
+		return store.User{}, 0, store.UploadBatch{}, 0, false
+	}
+	if batch.CreatedBy != current.ID {
+		writeError(w, http.StatusForbidden, ownerError)
+		return store.User{}, 0, store.UploadBatch{}, 0, false
+	}
+	return current, familyID, batch, itemID, true
+}
+
+func (a *app) findUploadItem(ctx context.Context, batchID int64, itemID int64) (store.UploadItem, bool, error) {
+	items, err := a.store.ListUploadItems(ctx, batchID)
+	if err != nil {
+		return store.UploadItem{}, false, err
+	}
+	for _, item := range items {
+		if item.ID == itemID {
+			return item, true, nil
+		}
+	}
+	return store.UploadItem{}, false, nil
 }
 
 func (a *app) requireAuth(next func(http.ResponseWriter, *http.Request)) http.HandlerFunc {
@@ -558,6 +1043,162 @@ func inviteResponse(invite store.FamilyInvite, now time.Time) map[string]any {
 		"expiresAt":         invite.ExpiresAt.Format(time.RFC3339),
 		"usedAt":            usedAt,
 	}
+}
+
+func uploadBatchResponse(batch store.UploadBatch) map[string]any {
+	return map[string]any{
+		"id":             batch.ID,
+		"familyId":       batch.FamilyID,
+		"status":         batch.Status,
+		"totalCount":     batch.TotalCount,
+		"readyCount":     batch.ReadyCount,
+		"failedCount":    batch.FailedCount,
+		"cancelledCount": batch.CancelledCount,
+		"createdAt":      batch.CreatedAt.Format(time.RFC3339),
+	}
+}
+
+func uploadTaskResponse(batch store.UploadBatch, items []store.UploadItem) map[string]any {
+	return map[string]any{
+		"batch": uploadBatchResponse(batch),
+		"items": uploadItemListResponse(items),
+	}
+}
+
+func uploadItemListResponse(items []store.UploadItem) []map[string]any {
+	result := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		result = append(result, uploadItemResponse(item))
+	}
+	return result
+}
+
+func uploadItemResponse(item store.UploadItem) map[string]any {
+	var mediaAssetID any
+	if item.MediaAssetID != 0 {
+		mediaAssetID = item.MediaAssetID
+	}
+	var completedAt any
+	if !item.CompletedAt.IsZero() {
+		completedAt = item.CompletedAt.Format(time.RFC3339)
+	}
+	return map[string]any{
+		"id":               item.ID,
+		"uploadBatchId":    item.UploadBatchID,
+		"mediaAssetId":     mediaAssetID,
+		"originalType":     item.OriginalType,
+		"originalFilename": item.OriginalFilename,
+		"contentType":      item.ContentType,
+		"byteSize":         item.ByteSize,
+		"status":           item.Status,
+		"errorMessage":     item.ErrorMessage,
+		"createdAt":        item.CreatedAt.Format(time.RFC3339),
+		"updatedAt":        item.UpdatedAt.Format(time.RFC3339),
+		"completedAt":      completedAt,
+	}
+}
+
+func mediaAssetResponse(asset store.MediaAsset) map[string]any {
+	var capturedAt any
+	if !asset.CapturedAt.IsZero() {
+		capturedAt = asset.CapturedAt.Format(time.RFC3339)
+	}
+	return map[string]any{
+		"id":              asset.ID,
+		"familyId":        asset.FamilyID,
+		"uploadedBy":      asset.UploadedBy,
+		"mediaType":       asset.MediaType,
+		"status":          asset.Status,
+		"renditionStatus": asset.RenditionStatus,
+		"capturedAt":      capturedAt,
+		"uploadedAt":      asset.UploadedAt.Format(time.RFC3339),
+	}
+}
+
+func (a *app) timelineResponse(ctx context.Context, items []store.TimelineMedia) (map[string]any, error) {
+	location, err := time.LoadLocation(store.DefaultFamilyTimezone)
+	if err != nil {
+		location = time.Local
+	}
+
+	groups := []map[string]any{}
+	groupIndexByDate := map[string]int{}
+	for _, item := range items {
+		mediaTime := timelineMediaTime(item.Asset).In(location)
+		dateKey := mediaTime.Format("2006-01-02")
+		groupIndex, ok := groupIndexByDate[dateKey]
+		if !ok {
+			groupIndex = len(groups)
+			groupIndexByDate[dateKey] = groupIndex
+			groups = append(groups, map[string]any{
+				"month":     mediaTime.Format("2006-01"),
+				"date":      dateKey,
+				"dateLabel": mediaTime.Format("01月02日"),
+				"items":     []map[string]any{},
+			})
+		}
+		responseItem, err := a.timelineItemResponse(ctx, item)
+		if err != nil {
+			return nil, err
+		}
+		groupItems := groups[groupIndex]["items"].([]map[string]any)
+		groups[groupIndex]["items"] = append(groupItems, responseItem)
+	}
+	return map[string]any{"groups": groups}, nil
+}
+
+func (a *app) timelineItemResponse(ctx context.Context, item store.TimelineMedia) (map[string]any, error) {
+	display, err := a.renditionResponse(ctx, item.Display)
+	if err != nil {
+		return nil, err
+	}
+	thumbnail, err := a.renditionResponse(ctx, item.Thumbnail)
+	if err != nil {
+		return nil, err
+	}
+
+	var capturedAt any
+	if !item.Asset.CapturedAt.IsZero() {
+		capturedAt = item.Asset.CapturedAt.Format(time.RFC3339)
+	}
+	return map[string]any{
+		"id":         item.Asset.ID,
+		"mediaType":  item.Asset.MediaType,
+		"capturedAt": capturedAt,
+		"uploadedAt": item.Asset.UploadedAt.Format(time.RFC3339),
+		"uploadedBy": map[string]any{
+			"id":          item.Asset.UploadedBy,
+			"displayName": item.UploadedByDisplayName,
+		},
+		"thumbnail": thumbnail,
+		"display":   display,
+	}, nil
+}
+
+func (a *app) renditionResponse(ctx context.Context, rendition store.MediaRendition) (map[string]any, error) {
+	url, err := a.storage.GetSignedDownloadURL(ctx, storage.SignedURLRequest{
+		Bucket:      a.cfg.PreviewsBucket,
+		ObjectKey:   rendition.ObjectKey,
+		ContentType: rendition.ContentType,
+		ExpiresIn:   a.cfg.SignedURLTTL,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"url":            url,
+		"contentType":    rendition.ContentType,
+		"width":          rendition.Width,
+		"height":         rendition.Height,
+		"durationMillis": rendition.DurationMillis,
+	}, nil
+}
+
+func timelineMediaTime(asset store.MediaAsset) time.Time {
+	if !asset.CapturedAt.IsZero() {
+		return asset.CapturedAt
+	}
+	return asset.UploadedAt
 }
 
 func parsePathID(r *http.Request, name string) (int64, error) {

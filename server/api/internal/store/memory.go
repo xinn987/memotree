@@ -6,6 +6,7 @@ package store
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,23 +17,29 @@ import (
 type MemoryStore struct {
 	mu sync.Mutex
 
-	nextUserID    int64
-	nextSessionID int64
-	nextFamilyID  int64
-	nextMemberID  int64
-	nextInviteID  int64
-	nextBatchID   int64
-	nextItemID    int64
+	nextUserID      int64
+	nextSessionID   int64
+	nextFamilyID    int64
+	nextMemberID    int64
+	nextInviteID    int64
+	nextBatchID     int64
+	nextItemID      int64
+	nextMediaID     int64
+	nextOriginalID  int64
+	nextRenditionID int64
 
-	users          map[int64]User
-	passwordHashes map[int64]string
-	loginToUserID  map[string]int64
-	sessions       map[string]Session
-	families       map[int64]family
-	members        map[int64]FamilyMember
-	invites        map[string]FamilyInvite
-	uploadBatches  map[int64]UploadBatch
-	uploadItems    map[int64]UploadItem
+	users           map[int64]User
+	passwordHashes  map[int64]string
+	loginToUserID   map[string]int64
+	sessions        map[string]Session
+	families        map[int64]family
+	members         map[int64]FamilyMember
+	invites         map[string]FamilyInvite
+	uploadBatches   map[int64]UploadBatch
+	uploadItems     map[int64]UploadItem
+	mediaAssets     map[int64]MediaAsset
+	mediaOriginals  map[int64]MediaOriginal
+	mediaRenditions map[int64]MediaRendition
 }
 
 // family 是内存 store 内部结构；HTTP 响应只暴露 FamilySummary。
@@ -46,15 +53,18 @@ type family struct {
 // NewMemoryStore 创建一份空的内存 store。
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		users:          map[int64]User{},
-		passwordHashes: map[int64]string{},
-		loginToUserID:  map[string]int64{},
-		sessions:       map[string]Session{},
-		families:       map[int64]family{},
-		members:        map[int64]FamilyMember{},
-		invites:        map[string]FamilyInvite{},
-		uploadBatches:  map[int64]UploadBatch{},
-		uploadItems:    map[int64]UploadItem{},
+		users:           map[int64]User{},
+		passwordHashes:  map[int64]string{},
+		loginToUserID:   map[string]int64{},
+		sessions:        map[string]Session{},
+		families:        map[int64]family{},
+		members:         map[int64]FamilyMember{},
+		invites:         map[string]FamilyInvite{},
+		uploadBatches:   map[int64]UploadBatch{},
+		uploadItems:     map[int64]UploadItem{},
+		mediaAssets:     map[int64]MediaAsset{},
+		mediaOriginals:  map[int64]MediaOriginal{},
+		mediaRenditions: map[int64]MediaRendition{},
 	}
 }
 
@@ -185,6 +195,46 @@ func (s *MemoryStore) IsActiveAdmin(_ context.Context, familyID int64, userID in
 	return false, nil
 }
 
+// ListTimelineMedia 返回家庭时间线中已经可展示的媒体。
+// 这里故意过滤掉仍在处理中的资产，保证上传任务状态和主时间线是两个清晰入口。
+func (s *MemoryStore) ListTimelineMedia(_ context.Context, input ListTimelineMediaInput) ([]TimelineMedia, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 60
+	}
+	result := []TimelineMedia{}
+	for _, asset := range s.mediaAssets {
+		if asset.FamilyID != input.FamilyID || asset.Status != MediaStatusActive || asset.RenditionStatus != RenditionStatusReady {
+			continue
+		}
+		display, thumbnail, ok := s.readyPreviewRenditions(asset)
+		if !ok {
+			continue
+		}
+		result = append(result, TimelineMedia{
+			Asset:                 asset,
+			UploadedByDisplayName: s.memberDisplayName(asset.FamilyID, asset.UploadedBy),
+			Thumbnail:             thumbnail,
+			Display:               display,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		left := timelineSortTime(result[i].Asset)
+		right := timelineSortTime(result[j].Asset)
+		if left.Equal(right) {
+			return result[i].Asset.ID > result[j].Asset.ID
+		}
+		return left.After(right)
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
 // CreateInvite 创建待使用邀请。
 // MVP 阶段为了便于管理员重新复制邀请链接，store 同时保存 token hash 和 token 原文。
 func (s *MemoryStore) CreateInvite(_ context.Context, familyID int64, tokenHash string, tokenPlaintext string, createdBy int64, memberDisplayName string, expiresAt time.Time) (FamilyInvite, error) {
@@ -295,6 +345,241 @@ func (s *MemoryStore) markInviteUsed(tokenHash string, invite FamilyInvite, user
 	s.invites[tokenHash] = invite
 }
 
+// FindActiveUploadBatch 查找同一用户在同一家庭中的 active 上传任务。
+// API 会用它把“再次上传”导向当前任务页，避免创建第二个 active batch。
+func (s *MemoryStore) FindActiveUploadBatch(_ context.Context, familyID int64, userID int64) (UploadBatch, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, batch := range s.uploadBatches {
+		if batch.FamilyID == familyID && batch.CreatedBy == userID && batch.ActiveSlot == 1 {
+			return batch, true, nil
+		}
+	}
+	return UploadBatch{}, false, nil
+}
+
+// ListUploadBatches 按创建时间倒序返回最近上传任务。
+// 管理员调用时 IncludeFamily=true，可查看整个家庭；普通成员只读取自己创建的任务。
+func (s *MemoryStore) ListUploadBatches(_ context.Context, input ListUploadBatchesInput) ([]UploadBatch, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	limit := input.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	result := []UploadBatch{}
+	for _, batch := range s.uploadBatches {
+		if batch.FamilyID != input.FamilyID {
+			continue
+		}
+		if !input.IncludeFamily && batch.CreatedBy != input.ActorUserID {
+			continue
+		}
+		result = append(result, batch)
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].CreatedAt.Equal(result[j].CreatedAt) {
+			return result[i].ID > result[j].ID
+		}
+		return result[i].CreatedAt.After(result[j].CreatedAt)
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
+}
+
+// FindUploadBatch 按家庭和任务 ID 读取上传任务。
+// familyID 是权限边界的一部分，避免跨家庭枚举任务 ID。
+func (s *MemoryStore) FindUploadBatch(_ context.Context, familyID int64, batchID int64) (UploadBatch, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batch, ok := s.uploadBatches[batchID]
+	if !ok || batch.FamilyID != familyID {
+		return UploadBatch{}, false, nil
+	}
+	return batch, true, nil
+}
+
+// ListUploadItems 返回上传任务下的文件条目，按 ID 稳定排序，方便前端和测试使用。
+func (s *MemoryStore) ListUploadItems(_ context.Context, batchID int64) ([]UploadItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := []UploadItem{}
+	for _, item := range s.uploadItems {
+		if item.UploadBatchID == batchID {
+			items = append(items, item)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].ID < items[j].ID
+	})
+	return items, nil
+}
+
+// StopUploadBatch 停止上传任务，并取消尚未完成的文件项。
+// 已经 ready 或失败的条目保留原状态，便于后续页面展示真实结果。
+func (s *MemoryStore) StopUploadBatch(_ context.Context, batchID int64, now time.Time) (UploadBatch, []UploadItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batch, ok := s.uploadBatches[batchID]
+	if !ok {
+		return UploadBatch{}, nil, ErrNotFound
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	batch.Status = UploadBatchStatusStopped
+	batch.ActiveSlot = 0
+	batch.StoppedAt = now
+	batch.CancelledCount = 0
+	batch.ReadyCount = 0
+	batch.FailedCount = 0
+
+	items := []UploadItem{}
+	for id, item := range s.uploadItems {
+		if item.UploadBatchID != batchID {
+			continue
+		}
+		if isCancellableUploadItemStatus(item.Status) {
+			item.Status = UploadItemStatusCancelled
+			item.UpdatedAt = now
+			item.CompletedAt = now
+			s.uploadItems[id] = item
+		}
+		switch item.Status {
+		case UploadItemStatusReady:
+			batch.ReadyCount++
+		case UploadItemStatusUploadFailed, UploadItemStatusProcessingFailed:
+			batch.FailedCount++
+		case UploadItemStatusCancelled:
+			batch.CancelledCount++
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].ID < items[j].ID
+	})
+	s.uploadBatches[batch.ID] = batch
+	return batch, items, nil
+}
+
+// CompleteUploadItem 在原文件 PUT 成功后，把上传条目转成媒体资产。
+// 这里是上传状态机的关键边界：前端只能完成 UploadItem，MediaAsset 由后端创建。
+func (s *MemoryStore) CompleteUploadItem(_ context.Context, input CompleteUploadItemInput) (UploadBatch, UploadItem, MediaAsset, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	batch, ok := s.uploadBatches[input.BatchID]
+	if !ok || batch.FamilyID != input.FamilyID || batch.CreatedBy != input.UploadedBy {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, ErrNotFound
+	}
+	item, ok := s.uploadItems[input.ItemID]
+	if !ok || item.UploadBatchID != batch.ID {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, ErrNotFound
+	}
+	if item.MediaAssetID != 0 || item.Status == UploadItemStatusCancelled {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, ErrInvalidUpload
+	}
+
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	mediaType, err := mediaTypeForOriginalType(item.OriginalType)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
+	}
+
+	s.nextMediaID++
+	asset := MediaAsset{
+		ID:              s.nextMediaID,
+		FamilyID:        batch.FamilyID,
+		UploadedBy:      batch.CreatedBy,
+		MediaType:       mediaType,
+		Status:          MediaStatusActive,
+		RenditionStatus: RenditionStatusPending,
+		UploadedAt:      now,
+	}
+	s.mediaAssets[asset.ID] = asset
+
+	s.nextOriginalID++
+	original := MediaOriginal{
+		ID:               s.nextOriginalID,
+		MediaAssetID:     asset.ID,
+		OriginalType:     item.OriginalType,
+		ObjectKey:        item.ObjectKey,
+		OriginalFilename: item.OriginalFilename,
+		ContentType:      fallbackString(input.ObjectType, item.ContentType),
+		ByteSize:         input.ObjectSize,
+		ChecksumSHA256:   input.ChecksumSHA256,
+		UploadedAt:       now,
+	}
+	s.mediaOriginals[original.ID] = original
+
+	item.MediaAssetID = asset.ID
+	item.Status = UploadItemStatusProcessing
+	item.UpdatedAt = now
+	s.uploadItems[item.ID] = item
+
+	batch.Status = UploadBatchStatusProcessing
+	s.uploadBatches[batch.ID] = batch
+	return batch, item, asset, nil
+}
+
+// MarkUploadItemFailed 记录浏览器直传对象存储失败。
+// 失败只绑定 UploadItem，不创建 MediaAsset，后续可重新生成上传 URL 重试。
+func (s *MemoryStore) MarkUploadItemFailed(_ context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batch, item, err := s.findMutableUploadItem(input.BatchID, input.ItemID, input.FamilyID, input.ActorUserID)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	if item.MediaAssetID != 0 || item.Status == UploadItemStatusProcessing || item.Status == UploadItemStatusReady || item.Status == UploadItemStatusCancelled {
+		return UploadBatch{}, UploadItem{}, ErrInvalidUpload
+	}
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	item.Status = UploadItemStatusUploadFailed
+	item.ErrorMessage = input.ErrorMessage
+	item.UpdatedAt = now
+	item.CompletedAt = now
+	s.uploadItems[item.ID] = item
+	batch = s.recalculateUploadBatch(batch)
+	s.uploadBatches[batch.ID] = batch
+	return batch, item, nil
+}
+
+// RetryUploadItem 把可重传的条目重置为 waiting，让 HTTP 层重新签发短期上传 URL。
+func (s *MemoryStore) RetryUploadItem(_ context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batch, item, err := s.findMutableUploadItem(input.BatchID, input.ItemID, input.FamilyID, input.ActorUserID)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	if item.MediaAssetID != 0 || (item.Status != UploadItemStatusWaiting && item.Status != UploadItemStatusUploadFailed) {
+		return UploadBatch{}, UploadItem{}, ErrInvalidUpload
+	}
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	item.Status = UploadItemStatusWaiting
+	item.ErrorMessage = ""
+	item.UpdatedAt = now
+	item.CompletedAt = time.Time{}
+	s.uploadItems[item.ID] = item
+	batch = s.recalculateUploadBatch(batch)
+	s.uploadBatches[batch.ID] = batch
+	return batch, item, nil
+}
+
 // CreateUploadBatch 创建上传任务和待上传文件条目。
 // 同一用户同一家庭只允许一个 active batch，和 MySQL 的唯一键语义保持一致。
 func (s *MemoryStore) CreateUploadBatch(_ context.Context, input CreateUploadBatchInput) (UploadBatch, []UploadItem, error) {
@@ -342,4 +627,128 @@ func (s *MemoryStore) CreateUploadBatch(_ context.Context, input CreateUploadBat
 		items = append(items, item)
 	}
 	return batch, items, nil
+}
+
+func (s *MemoryStore) readyPreviewRenditions(asset MediaAsset) (MediaRendition, MediaRendition, bool) {
+	var display MediaRendition
+	var thumbnail MediaRendition
+	for _, rendition := range s.mediaRenditions {
+		if rendition.MediaAssetID != asset.ID || rendition.Status != RenditionStatusReady {
+			continue
+		}
+		switch rendition.RenditionType {
+		case displayRenditionTypeForMedia(asset.MediaType):
+			display = rendition
+		case RenditionTypeThumbnail:
+			thumbnail = rendition
+		}
+	}
+	if display.ObjectKey == "" {
+		return MediaRendition{}, MediaRendition{}, false
+	}
+	if thumbnail.ObjectKey == "" {
+		thumbnail = display
+	}
+	return display, thumbnail, true
+}
+
+func (s *MemoryStore) memberDisplayName(familyID int64, userID int64) string {
+	for _, member := range s.members {
+		if member.FamilyID == familyID && member.UserID == userID && member.DisplayName != "" {
+			return member.DisplayName
+		}
+	}
+	if user, ok := s.users[userID]; ok {
+		return user.DisplayName
+	}
+	return ""
+}
+
+func timelineSortTime(asset MediaAsset) time.Time {
+	if !asset.CapturedAt.IsZero() {
+		return asset.CapturedAt
+	}
+	return asset.UploadedAt
+}
+
+func displayRenditionTypeForMedia(mediaType string) string {
+	if mediaType == MediaTypeVideo {
+		return RenditionTypeDisplayVideo
+	}
+	return RenditionTypeDisplayImage
+}
+
+func isCancellableUploadItemStatus(status string) bool {
+	return status == UploadItemStatusWaiting ||
+		status == UploadItemStatusUploading ||
+		status == UploadItemStatusUploaded ||
+		status == UploadItemStatusProcessing
+}
+
+func mediaTypeForOriginalType(originalType string) (string, error) {
+	switch originalType {
+	case OriginalTypeImage:
+		return MediaTypePhoto, nil
+	case OriginalTypeVideo:
+		return MediaTypeVideo, nil
+	default:
+		return "", ErrInvalidUpload
+	}
+}
+
+func fallbackString(value string, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return value
+	}
+	return fallback
+}
+
+func (s *MemoryStore) findMutableUploadItem(batchID int64, itemID int64, familyID int64, actorUserID int64) (UploadBatch, UploadItem, error) {
+	batch, ok := s.uploadBatches[batchID]
+	if !ok || batch.FamilyID != familyID || batch.CreatedBy != actorUserID {
+		return UploadBatch{}, UploadItem{}, ErrNotFound
+	}
+	item, ok := s.uploadItems[itemID]
+	if !ok || item.UploadBatchID != batch.ID {
+		return UploadBatch{}, UploadItem{}, ErrNotFound
+	}
+	return batch, item, nil
+}
+
+func (s *MemoryStore) recalculateUploadBatch(batch UploadBatch) UploadBatch {
+	batch.ReadyCount = 0
+	batch.FailedCount = 0
+	batch.CancelledCount = 0
+	hasProcessing := false
+	hasPending := false
+	for _, item := range s.uploadItems {
+		if item.UploadBatchID != batch.ID {
+			continue
+		}
+		switch item.Status {
+		case UploadItemStatusReady:
+			batch.ReadyCount++
+		case UploadItemStatusUploadFailed, UploadItemStatusProcessingFailed:
+			batch.FailedCount++
+		case UploadItemStatusCancelled:
+			batch.CancelledCount++
+		case UploadItemStatusProcessing:
+			hasProcessing = true
+		case UploadItemStatusWaiting, UploadItemStatusUploading, UploadItemStatusUploaded:
+			hasPending = true
+		}
+	}
+	switch {
+	case batch.CancelledCount == batch.TotalCount:
+		batch.Status = UploadBatchStatusStopped
+	case batch.FailedCount > 0:
+		batch.Status = UploadBatchStatusPartiallyFailed
+	case batch.ReadyCount == batch.TotalCount && batch.TotalCount > 0:
+		batch.Status = UploadBatchStatusCompleted
+	case hasProcessing:
+		batch.Status = UploadBatchStatusProcessing
+	case hasPending:
+		batch.Status = UploadBatchStatusCreated
+	}
+	return batch
 }

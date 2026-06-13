@@ -9,6 +9,7 @@ coverage/
 .gomodcache/
 .gopath/
 .tmp/
+logs/
 *.tsbuildinfo
 
 bin/

@@ -41,15 +41,27 @@ POST /invites/{token}/join
 
 ```text
 POST /families/{familyId}/media/upload-intents
-POST /families/{familyId}/media/{mediaId}/complete-upload
+GET  /families/{familyId}/uploads/active
+GET  /families/{familyId}/uploads/{batchId}
+POST /families/{familyId}/uploads/{batchId}/stop
+POST /families/{familyId}/uploads/{batchId}/items/{itemId}/complete-upload
+POST /families/{familyId}/uploads/{batchId}/items/{itemId}/fail-upload
+POST /families/{familyId}/uploads/{batchId}/items/{itemId}/retry-upload
 ```
 
 原则：
 
 - 创建 upload intent 前校验 active membership。
+- `upload-intents` 的 `files[]` 是文件元数据清单，只包含文件名、MIME 类型和大小，不上传真实文件字节。
 - 每个文件独立记录状态，批量上传允许部分失败。
 - 原文件对象 key 由后端生成，前端不自行决定存储路径。
 - `upload-intents` 返回短期 `PUT` 上传 URL、上传项 ID、文件类型和过期时间；前端上传原文件时应使用响应里的 `Content-Type`。
+- 前端 PUT 原文件成功后调用 `complete-upload` 完成对应 `UploadItem`；后端通过 `HeadObject` 确认对象存在后创建 `MediaAsset` 和 `MediaOriginal`。
+- 如果同一用户在同一家庭已经有 active 上传任务，`upload-intents` 返回当前任务摘要和空 items，前端应进入当前任务页而不是创建第二个任务。
+- 上传任务查询只返回任务和文件条目摘要，不返回 object key，也不重新生成上传授权 URL。
+- 前端 PUT 原文件失败后调用 `fail-upload` 记录可重试失败；`retry-upload` 会把可重试条目重置为 `waiting` 并返回新的短期 `PUT` 上传 URL。
+- 上传者可以查看和停止自己的上传任务；`admin` 可以查看和停止家庭内成员的上传任务。
+- 停止上传任务后，已完成条目保留，未完成条目标记为 `cancelled`，该任务不再占用 active 上传槽位。
 - MVP 本地开发使用 MinIO，线上可以使用 R2 或其他 S3-compatible 对象存储；业务代码只依赖 storage adapter。
 
 ## Timeline

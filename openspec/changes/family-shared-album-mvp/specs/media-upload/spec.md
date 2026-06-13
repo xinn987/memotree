@@ -28,6 +28,11 @@ The system SHALL allow active family members to upload multiple photos and video
 - **WHEN** a member selects multiple supported media files
 - **THEN** the system uploads each file independently and reports progress for each file or the batch
 
+#### Scenario: Complete direct upload item
+
+- **WHEN** a member finishes uploading an original file through a signed object-storage URL
+- **THEN** the system completes the corresponding upload item, verifies the object exists, and creates the media asset and original-file metadata
+
 #### Scenario: Partial upload failure
 
 - **WHEN** one file in a batch fails while other files succeed
