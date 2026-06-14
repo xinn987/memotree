@@ -10,9 +10,10 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
-const defaultLogDir = "logs"
+const defaultLogDirName = "logs"
 
 // ServiceConfig 描述单个后端服务的日志输出位置。
 type ServiceConfig struct {
@@ -22,7 +23,7 @@ type ServiceConfig struct {
 }
 
 // ConfigureFromEnv 使用 LOG_DIR 初始化服务日志。
-// LOG_DIR 为空时默认写入当前工作目录下的 logs/。
+// LOG_DIR 为空时由 logging 包解析到后端统一的 server/logs/，避免不同启动工作目录分散日志。
 func ConfigureFromEnv(serviceName string) (func(), error) {
 	return Configure(ServiceConfig{
 		ServiceName:   serviceName,
@@ -39,7 +40,11 @@ func Configure(config ServiceConfig) (func(), error) {
 	}
 	logDir := config.LogDir
 	if logDir == "" {
-		logDir = defaultLogDir
+		var err error
+		logDir, err = defaultLogDir()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if config.ConsoleWriter == nil {
 		config.ConsoleWriter = os.Stdout
@@ -67,4 +72,14 @@ func Configure(config ServiceConfig) (func(), error) {
 		log.SetPrefix(previousPrefix)
 		_ = logFile.Close()
 	}, nil
+}
+
+// defaultLogDir 通过当前源码位置定位 server/logs。
+// 后端 Go 进程无论从仓库根目录还是 server/ 目录启动，都应写入同一个日志目录。
+func defaultLogDir() (string, error) {
+	_, currentFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", fmt.Errorf("resolve logging source path")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", defaultLogDirName)), nil
 }

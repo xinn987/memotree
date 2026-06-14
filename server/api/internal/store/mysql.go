@@ -1039,6 +1039,9 @@ func scanTimelineMedia(scanner uploadItemScanner) (TimelineMedia, error) {
 	var capturedAt sql.NullTime
 	var deletedAt sql.NullTime
 	var display MediaRendition
+	var displayWidth sql.NullInt64
+	var displayHeight sql.NullInt64
+	var displayDurationMillis sql.NullInt64
 	var displayErrorMessage sql.NullString
 	var thumbID sql.NullInt64
 	var thumbMediaAssetID sql.NullInt64
@@ -1069,9 +1072,9 @@ func scanTimelineMedia(scanner uploadItemScanner) (TimelineMedia, error) {
 		&display.ObjectKey,
 		&display.ContentType,
 		&display.ByteSize,
-		&display.Width,
-		&display.Height,
-		&display.DurationMillis,
+		&displayWidth,
+		&displayHeight,
+		&displayDurationMillis,
 		&display.Status,
 		&displayErrorMessage,
 		&thumbID,
@@ -1097,6 +1100,15 @@ func scanTimelineMedia(scanner uploadItemScanner) (TimelineMedia, error) {
 	}
 	if displayErrorMessage.Valid {
 		display.ErrorMessage = displayErrorMessage.String
+	}
+	if displayWidth.Valid {
+		display.Width = int(displayWidth.Int64)
+	}
+	if displayHeight.Valid {
+		display.Height = int(displayHeight.Int64)
+	}
+	if displayDurationMillis.Valid {
+		display.DurationMillis = displayDurationMillis.Int64
 	}
 	item.Display = display
 	item.Thumbnail = display

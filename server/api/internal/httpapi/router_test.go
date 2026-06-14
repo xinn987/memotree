@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -601,6 +604,29 @@ func TestTimelineReturnsReadyMediaGroupsWithSignedPreviewURLs(t *testing.T) {
 	getJSON(t, router, guestCookie, http.StatusForbidden, "/families/"+itoa(int(familyID))+"/timeline")
 }
 
+func TestTimelineLogsInternalStoreError(t *testing.T) {
+	var logs bytes.Buffer
+	previousOutput := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() {
+		log.SetOutput(previousOutput)
+	})
+
+	appStore := &timelineErrorStore{MemoryStore: store.NewMemoryStore()}
+	router := newUploadTestRouter(appStore, fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	getJSON(t, router, rootCookie, http.StatusInternalServerError, "/families/"+itoa(familyID)+"/timeline")
+
+	logText := logs.String()
+	if !strings.Contains(logText, "读取时间线失败") || !strings.Contains(logText, "timeline exploded") || !strings.Contains(logText, "GET /families/1/timeline") {
+		t.Fatalf("expected internal timeline error to be logged with path and cause, got %q", logText)
+	}
+	if !strings.Contains(logText, "goroutine") {
+		t.Fatalf("expected internal error log to include stack trace, got %q", logText)
+	}
+}
+
 func TestStopUploadTaskEnforcesOwnerAndAdminAccess(t *testing.T) {
 	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
 	adminCookie, familyID := createSignedInFamily(t, router, "root")
@@ -774,6 +800,14 @@ func (s *timelineStore) ListTimelineMedia(_ context.Context, input store.ListTim
 		}
 	}
 	return result, nil
+}
+
+type timelineErrorStore struct {
+	*store.MemoryStore
+}
+
+func (s *timelineErrorStore) ListTimelineMedia(_ context.Context, _ store.ListTimelineMediaInput) ([]store.TimelineMedia, error) {
+	return nil, errors.New("timeline exploded")
 }
 
 func postJSON(t *testing.T, router http.Handler, cookie *http.Cookie, expectedStatus int, path string, payload any) (*http.Cookie, map[string]any) {

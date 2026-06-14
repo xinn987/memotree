@@ -8,10 +8,17 @@ import (
 	"strings"
 
 	"memotree/server/devtools/internal/buckets"
+	"memotree/server/internal/logging"
 	"memotree/server/internal/storage"
 )
 
 func main() {
+	cleanupLog, err := logging.ConfigureFromEnv("init-storage")
+	if err != nil {
+		log.Fatalf("configure logging: %v", err)
+	}
+	defer cleanupLog()
+
 	cfg := loadConfig()
 	ctx := context.Background()
 	s3Storage, err := storage.NewS3Service(storage.S3Config{

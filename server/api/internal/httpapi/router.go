@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"path"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -381,12 +382,12 @@ func (a *app) listTimeline(w http.ResponseWriter, r *http.Request) {
 		Limit:    60,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "读取时间线失败")
+		writeInternalError(w, r, "读取时间线失败", err)
 		return
 	}
 	response, err := a.timelineResponse(r.Context(), items)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "生成预览访问链接失败")
+		writeInternalError(w, r, "生成预览访问链接失败", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -1247,7 +1248,15 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	if status >= http.StatusInternalServerError {
+		log.Printf("internal error method=<unknown> path=<unknown> message=%q stack=%s", message, debug.Stack())
+	}
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeInternalError(w http.ResponseWriter, r *http.Request, message string, err error) {
+	log.Printf("internal error method=%s path=%s message=%q error=%v stack=%s", r.Method, r.URL.Path, message, err, debug.Stack())
+	writeJSON(w, http.StatusInternalServerError, map[string]string{"error": message})
 }
 
 // familyListResponse 固化 HTTP 契约：没有家庭时返回 JSON []，不能返回 null。
