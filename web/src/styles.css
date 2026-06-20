@@ -303,6 +303,12 @@ h2 {
   margin: 0;
 }
 
+.timeline-filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+
 .timeline-groups {
   display: grid;
   gap: 18px;
@@ -333,6 +339,16 @@ h2 {
   display: grid;
   gap: 6px;
   min-width: 0;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+}
+
+.timeline-card:focus-visible {
+  outline: 3px solid rgb(31 79 178 / 28%);
+  outline-offset: 3px;
 }
 
 .timeline-card img {
@@ -360,6 +376,79 @@ h2 {
 
 .timeline-card-meta time {
   flex: 0 0 auto;
+}
+
+.timeline-more-button {
+  width: 100%;
+}
+
+.media-detail-shell {
+  display: grid;
+  gap: 14px;
+}
+
+.detail-back {
+  width: fit-content;
+  padding: 0;
+}
+
+.media-detail-viewer {
+  display: grid;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #111827;
+  box-shadow: 0 16px 42px rgb(17 24 39 / 16%);
+}
+
+.media-detail-viewer img,
+.media-detail-viewer video {
+  display: block;
+  width: 100%;
+  max-height: min(72vh, 720px);
+  object-fit: contain;
+  background: #111827;
+}
+
+.media-detail-meta,
+.media-detail-empty {
+  padding: 16px;
+}
+
+.media-detail-empty p {
+  margin-bottom: 0;
+  color: #687386;
+}
+
+.media-detail-meta {
+  display: grid;
+  gap: 14px;
+}
+
+.media-detail-meta dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.media-detail-meta dl div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 14px;
+  border-top: 1px solid #eef2f6;
+  padding-top: 10px;
+}
+
+.media-detail-meta dt {
+  color: #687386;
+  font-size: 13px;
+}
+
+.media-detail-meta dd {
+  margin: 0;
+  color: #172033;
+  font-weight: 700;
+  text-align: right;
 }
 
 .upload-panel {

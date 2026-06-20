@@ -604,6 +604,174 @@ func TestTimelineReturnsReadyMediaGroupsWithSignedPreviewURLs(t *testing.T) {
 	getJSON(t, router, guestCookie, http.StatusForbidden, "/families/"+itoa(int(familyID))+"/timeline")
 }
 
+func TestTimelineSupportsStableCursorPagination(t *testing.T) {
+	appStore := &timelineStore{MemoryStore: store.NewMemoryStore()}
+	router := newUploadTestRouter(appStore, fakeStorageService{})
+
+	rootCookie, rootUser := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "root",
+		"password":    "secret123",
+		"displayName": "妈妈账号",
+	})
+	_, family := postJSON(t, router, rootCookie, http.StatusCreated, "/families", map[string]string{
+		"displayName": "小树之家",
+	})
+	familyID := int64(family["id"].(float64))
+	rootUserID := int64(rootUser["id"].(float64))
+	appStore.rows = []store.TimelineMedia{
+		timelineRow(1, familyID, rootUserID, time.Date(2026, 6, 13, 9, 0, 0, 0, time.UTC)),
+		timelineRow(2, familyID, rootUserID, time.Date(2026, 6, 12, 9, 0, 0, 0, time.UTC)),
+		timelineRow(3, familyID, rootUserID, time.Date(2026, 6, 11, 9, 0, 0, 0, time.UTC)),
+	}
+
+	_, firstPage := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(int(familyID))+"/timeline?limit=2")
+	if ids := collectTimelineItemIDs(firstPage); len(ids) != 2 || ids[0] != 1 || ids[1] != 2 {
+		t.Fatalf("unexpected first timeline page: %#v", firstPage)
+	}
+	nextCursor, ok := firstPage["nextCursor"].(string)
+	if !ok || nextCursor == "" {
+		t.Fatalf("expected first page to include nextCursor, got %#v", firstPage)
+	}
+
+	_, secondPage := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(int(familyID))+"/timeline?limit=2&cursor="+nextCursor)
+	if ids := collectTimelineItemIDs(secondPage); len(ids) != 1 || ids[0] != 3 {
+		t.Fatalf("expected cursor page to include only older media, got %#v", secondPage)
+	}
+	if secondPage["nextCursor"] != nil {
+		t.Fatalf("expected final page to omit next cursor, got %#v", secondPage)
+	}
+}
+
+func TestTimelineRejectsInvalidCursor(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	getJSON(t, router, rootCookie, http.StatusBadRequest, "/families/"+itoa(familyID)+"/timeline?cursor=not-a-cursor")
+}
+
+func TestTimelineSupportsMediaTypeAndMonthFilters(t *testing.T) {
+	appStore := &timelineStore{MemoryStore: store.NewMemoryStore()}
+	router := newUploadTestRouter(appStore, fakeStorageService{})
+
+	rootCookie, rootUser := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "root",
+		"password":    "secret123",
+		"displayName": "妈妈账号",
+	})
+	_, family := postJSON(t, router, rootCookie, http.StatusCreated, "/families", map[string]string{
+		"displayName": "小树之家",
+	})
+	familyID := int64(family["id"].(float64))
+	rootUserID := int64(rootUser["id"].(float64))
+	junePhoto := timelineRow(1, familyID, rootUserID, time.Date(2026, 6, 13, 9, 0, 0, 0, time.UTC))
+	juneVideo := timelineRow(2, familyID, rootUserID, time.Date(2026, 6, 12, 9, 0, 0, 0, time.UTC))
+	juneVideo.Asset.MediaType = store.MediaTypeVideo
+	juneVideo.Display.RenditionType = store.RenditionTypeDisplayVideo
+	julyVideo := timelineRow(3, familyID, rootUserID, time.Date(2026, 7, 1, 9, 0, 0, 0, time.UTC))
+	julyVideo.Asset.MediaType = store.MediaTypeVideo
+	julyVideo.Display.RenditionType = store.RenditionTypeDisplayVideo
+	appStore.rows = []store.TimelineMedia{junePhoto, juneVideo, julyVideo}
+
+	_, filtered := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(int(familyID))+"/timeline?mediaType=video&month=2026-06")
+	if ids := collectTimelineItemIDs(filtered); len(ids) != 1 || ids[0] != 2 {
+		t.Fatalf("expected filters to return only June video media, got %#v", filtered)
+	}
+
+	getJSON(t, router, rootCookie, http.StatusBadRequest, "/families/"+itoa(int(familyID))+"/timeline?mediaType=audio")
+	getJSON(t, router, rootCookie, http.StatusBadRequest, "/families/"+itoa(int(familyID))+"/timeline?month=2026-13")
+}
+
+func TestOriginalDownloadEndpointIsDeferred(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	request := httptest.NewRequest(http.MethodPost, "/families/"+itoa(familyID)+"/media/1/download", nil)
+	request.AddCookie(rootCookie)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("expected original download endpoint to be deferred with 404, got %d body %s", response.Code, response.Body.String())
+	}
+}
+
+func TestMediaDetailReturnsReadyMediaWithSignedPreviewURLs(t *testing.T) {
+	appStore := &mediaDetailStore{MemoryStore: store.NewMemoryStore(), visible: true}
+	router := newUploadTestRouter(appStore, fakeStorageService{})
+
+	rootCookie, rootUser := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "root",
+		"password":    "secret123",
+		"displayName": "妈妈账号",
+	})
+	_, family := postJSON(t, router, rootCookie, http.StatusCreated, "/families", map[string]string{
+		"displayName": "小树之家",
+	})
+	familyID := int64(family["id"].(float64))
+	rootUserID := int64(rootUser["id"].(float64))
+	appStore.detail = store.MediaDetail(timelineRow(7, familyID, rootUserID, time.Date(2026, 6, 13, 9, 0, 0, 0, time.UTC)))
+
+	_, detail := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(int(familyID))+"/media/7")
+	media := detail["media"].(map[string]any)
+	display := media["display"].(map[string]any)
+	thumbnail := media["thumbnail"].(map[string]any)
+	if media["id"] != float64(7) || display["url"] != "https://storage.example/download/previews/families/1/7-display.jpg" || thumbnail["url"] != "https://storage.example/download/previews/families/1/7-thumb.jpg" {
+		t.Fatalf("unexpected media detail response: %#v", detail)
+	}
+	assertNoObjectKeyField(t, detail)
+}
+
+func TestMediaDetailEnforcesVisibility(t *testing.T) {
+	appStore := &mediaDetailStore{MemoryStore: store.NewMemoryStore(), visible: true}
+	router := newUploadTestRouter(appStore, fakeStorageService{})
+
+	rootCookie, rootUser := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "root",
+		"password":    "secret123",
+		"displayName": "妈妈账号",
+	})
+	_, family := postJSON(t, router, rootCookie, http.StatusCreated, "/families", map[string]string{
+		"displayName": "小树之家",
+	})
+	familyID := int64(family["id"].(float64))
+	rootUserID := int64(rootUser["id"].(float64))
+	appStore.detail = store.MediaDetail(timelineRow(7, familyID, rootUserID, time.Date(2026, 6, 13, 9, 0, 0, 0, time.UTC)))
+
+	guestCookie, _ := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "guest",
+		"password":    "secret123",
+		"displayName": "访客",
+	})
+	getJSON(t, router, guestCookie, http.StatusForbidden, "/families/"+itoa(int(familyID))+"/media/7")
+
+	appStore.visible = false
+	getJSON(t, router, rootCookie, http.StatusNotFound, "/families/"+itoa(int(familyID))+"/media/7")
+}
+
+func TestRemovedMemberCannotAccessTimelineOrMediaDetail(t *testing.T) {
+	appStore := &removedMemberAccessStore{MemoryStore: store.NewMemoryStore()}
+	router := newUploadTestRouter(appStore, fakeStorageService{})
+	adminCookie, adminUser := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "root",
+		"password":    "secret123",
+		"displayName": "妈妈账号",
+	})
+	_, family := postJSON(t, router, adminCookie, http.StatusCreated, "/families", map[string]string{
+		"displayName": "小树之家",
+	})
+	familyID := int(family["id"].(float64))
+	adminUserID := int64(adminUser["id"].(float64))
+	memberCookie := joinFamilyWithInvite(t, router, adminCookie, familyID, "removed-grandma")
+	_, memberSession := getJSON(t, router, memberCookie, http.StatusOK, "/auth/session")
+	memberUser := memberSession["user"].(map[string]any)
+
+	appStore.removedUserID = int64(memberUser["id"].(float64))
+	appStore.row = timelineRow(7, int64(familyID), adminUserID, time.Date(2026, 6, 13, 9, 0, 0, 0, time.UTC))
+
+	getJSON(t, router, memberCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/timeline")
+	getJSON(t, router, memberCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/media/7")
+}
+
 func TestTimelineLogsInternalStoreError(t *testing.T) {
 	var logs bytes.Buffer
 	previousOutput := log.Writer()
@@ -757,6 +925,51 @@ func TestFailAndRetryUploadItem(t *testing.T) {
 	}
 }
 
+func TestBatchKeepsPartialFailureWhenAnotherItemCompletes(t *testing.T) {
+	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+	rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+	_, uploadIntent := postJSON(t, router, rootCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "failed.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+			{
+				"filename":    "completed.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+		},
+	})
+	batch := uploadIntent["batch"].(map[string]any)
+	items := uploadIntent["items"].([]any)
+	batchID := int(batch["id"].(float64))
+	failedItemID := int(items[0].(map[string]any)["id"].(float64))
+	completedItemID := int(items[1].(map[string]any)["id"].(float64))
+
+	postJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/items/"+itoa(failedItemID)+"/fail-upload", map[string]string{
+		"errorMessage": "network interrupted",
+	})
+	_, completed := postJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/items/"+itoa(completedItemID)+"/complete-upload", map[string]any{})
+
+	completedBatch := completed["batch"].(map[string]any)
+	if completedBatch["status"] != store.UploadBatchStatusPartiallyFailed || completedBatch["failedCount"] != float64(1) {
+		t.Fatalf("expected batch to preserve partial failure after another item completes, got %#v", completed)
+	}
+
+	_, detail := getJSON(t, router, rootCookie, http.StatusOK, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID))
+	detailItems := detail["items"].([]any)
+	statuses := map[string]bool{}
+	for _, rawItem := range detailItems {
+		statuses[rawItem.(map[string]any)["status"].(string)] = true
+	}
+	if !statuses[store.UploadItemStatusUploadFailed] || !statuses[store.UploadItemStatusProcessing] {
+		t.Fatalf("expected failed and processing items to remain visible, got %#v", detail)
+	}
+}
+
 func TestRetryUploadItemRejectsAlreadyProcessingItem(t *testing.T) {
 	router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
 	rootCookie, familyID := createSignedInFamily(t, router, "root")
@@ -796,10 +1009,107 @@ func (s *timelineStore) ListTimelineMedia(_ context.Context, input store.ListTim
 	result := []store.TimelineMedia{}
 	for _, row := range s.rows {
 		if row.Asset.FamilyID == input.FamilyID {
+			sortTime := timelineMediaTime(row.Asset)
+			if input.MediaType != "" && row.Asset.MediaType != input.MediaType {
+				continue
+			}
+			if !input.MonthFrom.IsZero() && (sortTime.Before(input.MonthFrom) || !sortTime.Before(input.MonthTo)) {
+				continue
+			}
+			if !input.AfterTime.IsZero() {
+				if sortTime.After(input.AfterTime) || sortTime.Equal(input.AfterTime) && row.Asset.ID >= input.AfterID {
+					continue
+				}
+			}
 			result = append(result, row)
 		}
 	}
+	if input.Limit > 0 && len(result) > input.Limit {
+		result = result[:input.Limit]
+	}
 	return result, nil
+}
+
+type mediaDetailStore struct {
+	*store.MemoryStore
+	detail  store.MediaDetail
+	visible bool
+}
+
+func (s *mediaDetailStore) FindMediaDetail(_ context.Context, input store.FindMediaDetailInput) (store.MediaDetail, bool, error) {
+	if !s.visible {
+		return store.MediaDetail{}, false, nil
+	}
+	if s.detail.Asset.FamilyID != input.FamilyID || s.detail.Asset.ID != input.MediaID {
+		return store.MediaDetail{}, false, nil
+	}
+	return s.detail, true, nil
+}
+
+type removedMemberAccessStore struct {
+	*store.MemoryStore
+	removedUserID int64
+	row           store.TimelineMedia
+}
+
+func (s *removedMemberAccessStore) IsActiveMember(ctx context.Context, familyID int64, userID int64) (bool, error) {
+	if userID == s.removedUserID {
+		return false, nil
+	}
+	return s.MemoryStore.IsActiveMember(ctx, familyID, userID)
+}
+
+func (s *removedMemberAccessStore) ListTimelineMedia(_ context.Context, input store.ListTimelineMediaInput) ([]store.TimelineMedia, error) {
+	if s.row.Asset.FamilyID != input.FamilyID {
+		return []store.TimelineMedia{}, nil
+	}
+	return []store.TimelineMedia{s.row}, nil
+}
+
+func (s *removedMemberAccessStore) FindMediaDetail(_ context.Context, input store.FindMediaDetailInput) (store.MediaDetail, bool, error) {
+	if s.row.Asset.FamilyID != input.FamilyID || s.row.Asset.ID != input.MediaID {
+		return store.MediaDetail{}, false, nil
+	}
+	return store.MediaDetail(s.row), true, nil
+}
+
+func timelineRow(id int64, familyID int64, uploadedBy int64, uploadedAt time.Time) store.TimelineMedia {
+	return store.TimelineMedia{
+		Asset: store.MediaAsset{
+			ID:              id,
+			FamilyID:        familyID,
+			UploadedBy:      uploadedBy,
+			MediaType:       store.MediaTypePhoto,
+			Status:          store.MediaStatusActive,
+			RenditionStatus: store.RenditionStatusReady,
+			UploadedAt:      uploadedAt,
+		},
+		UploadedByDisplayName: "妈妈",
+		Thumbnail: store.MediaRendition{
+			RenditionType: store.RenditionTypeThumbnail,
+			ObjectKey:     fmt.Sprintf("previews/families/1/%d-thumb.jpg", id),
+			ContentType:   "image/jpeg",
+			Status:        store.RenditionStatusReady,
+		},
+		Display: store.MediaRendition{
+			RenditionType: store.RenditionTypeDisplayImage,
+			ObjectKey:     fmt.Sprintf("previews/families/1/%d-display.jpg", id),
+			ContentType:   "image/jpeg",
+			Status:        store.RenditionStatusReady,
+		},
+	}
+}
+
+func collectTimelineItemIDs(response map[string]any) []int {
+	ids := []int{}
+	for _, rawGroup := range response["groups"].([]any) {
+		group := rawGroup.(map[string]any)
+		for _, rawItem := range group["items"].([]any) {
+			item := rawItem.(map[string]any)
+			ids = append(ids, int(item["id"].(float64)))
+		}
+	}
+	return ids
 }
 
 type timelineErrorStore struct {

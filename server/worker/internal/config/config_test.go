@@ -9,6 +9,8 @@ func TestLoadDefaults(t *testing.T) {
 	t.Setenv("APP_ENV", "")
 	t.Setenv("MEDIA_WORKER_CONCURRENCY", "")
 	t.Setenv("MEDIA_WORKER_POLL_INTERVAL_SECONDS", "")
+	t.Setenv("FFMPEG_PATH", "")
+	t.Setenv("FFPROBE_PATH", "")
 
 	cfg := Load()
 	if cfg.AppEnv != "local" {
@@ -23,6 +25,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.OriginalsBucket != "memotree-originals" || cfg.PreviewsBucket != "memotree-previews" {
 		t.Fatalf("unexpected default buckets: %#v", cfg)
 	}
+	if cfg.FFmpegPath != "ffmpeg" || cfg.FFprobePath != "ffprobe" {
+		t.Fatalf("unexpected default ffmpeg config: %#v", cfg)
+	}
 }
 
 func TestLoadStorageAndDatabaseConfig(t *testing.T) {
@@ -33,6 +38,8 @@ func TestLoadStorageAndDatabaseConfig(t *testing.T) {
 	t.Setenv("STORAGE_SECRET_ACCESS_KEY", "secret")
 	t.Setenv("STORAGE_USE_PATH_STYLE", "true")
 	t.Setenv("MEDIA_WORKER_POLL_INTERVAL_SECONDS", "3")
+	t.Setenv("FFMPEG_PATH", "C:\\tools\\ffmpeg.exe")
+	t.Setenv("FFPROBE_PATH", "C:\\tools\\ffprobe.exe")
 
 	cfg := Load()
 	if cfg.MySQLDSN == "" || cfg.StorageEndpoint == "" || cfg.StorageAccessKeyID == "" || cfg.StorageSecretKey == "" {
@@ -43,5 +50,8 @@ func TestLoadStorageAndDatabaseConfig(t *testing.T) {
 	}
 	if cfg.PollInterval != 3*time.Second {
 		t.Fatalf("expected poll interval 3s, got %s", cfg.PollInterval)
+	}
+	if cfg.FFmpegPath != "C:\\tools\\ffmpeg.exe" || cfg.FFprobePath != "C:\\tools\\ffprobe.exe" {
+		t.Fatalf("expected ffmpeg config to be loaded, got %#v", cfg)
 	}
 }

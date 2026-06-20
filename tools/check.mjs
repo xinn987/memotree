@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { ensureTool, ensureWebDependencies, printHelp, repoRoot, run, serverDir, webDir } from "./shared.mjs";
+import { ensureTool, ensureWebDependencies, ensureWorkspaceToolDependencies, printHelp, repoRoot, run, serverDir, webDir } from "./shared.mjs";
 
 if (process.argv.includes("--help") || process.argv.includes("-h")) {
   printHelp("check.mjs", "Run the full cross-platform MemoTree verification suite.");
@@ -12,8 +12,10 @@ ensureTool("npm", ["--version"]);
 ensureTool("go", ["version"]);
 ensureTool("openspec", ["--version"]);
 
+ensureWorkspaceToolDependencies();
 ensureWebDependencies();
 
+run("node", ["--test", "tools/shared.test.mjs"], { cwd: repoRoot });
 run("go", ["test", "./..."], { cwd: serverDir });
 run("npm", ["run", "check"], { cwd: webDir });
 run("npm", ["run", "build"], { cwd: webDir });

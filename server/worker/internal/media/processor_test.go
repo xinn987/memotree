@@ -95,9 +95,113 @@ func TestProcessorMarksPhotoJobFailedWhenOriginalCannotDecode(t *testing.T) {
 	}
 }
 
+func TestProcessorProcessesVideoJob(t *testing.T) {
+	ctx := context.Background()
+	original := []byte("video-original")
+	objectStore := &fakeObjectStore{
+		objects: map[string]storedObject{
+			"originals:originals/families/1/users/1/baby.mp4": {
+				body:        original,
+				contentType: "video/mp4",
+			},
+		},
+	}
+	repository := &fakeRepository{}
+	transcoder := &fakeVideoTranscoder{
+		output: VideoTranscodeOutput{
+			Thumbnail:       jpegBytes(t, 320, 180),
+			DisplayVideo:    []byte("display-video"),
+			Width:           1280,
+			Height:          720,
+			DurationMillis:  4200,
+			ThumbnailWidth:  320,
+			ThumbnailHeight: 180,
+		},
+	}
+	processor := Processor{
+		Repository:      repository,
+		ObjectStore:     objectStore,
+		OriginalsBucket: "originals",
+		PreviewsBucket:  "previews",
+		VideoTranscoder: transcoder,
+		Now: func() time.Time {
+			return time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)
+		},
+	}
+
+	err := processor.ProcessVideoJob(ctx, VideoJob{
+		MediaAssetID:      43,
+		UploadItemID:      8,
+		UploadBatchID:     4,
+		OriginalObjectKey: "originals/families/1/users/1/baby.mp4",
+		OriginalFilename:  "baby.mp4",
+	})
+
+	if err != nil {
+		t.Fatalf("process video job: %v", err)
+	}
+	if string(transcoder.input.Original) != string(original) || transcoder.input.OriginalFilename != "baby.mp4" {
+		t.Fatalf("expected transcoder to receive original video, got %#v", transcoder.input)
+	}
+	thumbnail := objectStore.objects["previews:previews/media/43/thumbnail.jpg"]
+	if thumbnail.contentType != "image/jpeg" || len(thumbnail.body) == 0 {
+		t.Fatalf("expected uploaded thumbnail jpeg, got %#v", thumbnail)
+	}
+	display := objectStore.objects["previews:previews/media/43/display.mp4"]
+	if display.contentType != "video/mp4" || string(display.body) != "display-video" {
+		t.Fatalf("expected uploaded display video, got %#v", display)
+	}
+	if repository.completedVideo.MediaAssetID != 43 || repository.completedVideo.UploadItemID != 8 || len(repository.completedVideo.Renditions) != 2 {
+		t.Fatalf("expected completed video with two renditions, got %#v", repository.completedVideo)
+	}
+	if repository.completedVideo.Width != 1280 || repository.completedVideo.Height != 720 || repository.completedVideo.DurationMillis != 4200 {
+		t.Fatalf("expected video metadata to be recorded, got %#v", repository.completedVideo)
+	}
+	if repository.completedVideo.Renditions[1].RenditionType != "display_video" || repository.completedVideo.Renditions[1].DurationMillis != 4200 {
+		t.Fatalf("expected display video rendition metadata, got %#v", repository.completedVideo.Renditions)
+	}
+}
+
+func TestProcessorMarksVideoJobFailedWhenTranscoderFails(t *testing.T) {
+	ctx := context.Background()
+	objectStore := &fakeObjectStore{
+		objects: map[string]storedObject{
+			"originals:bad.mp4": {
+				body:        []byte("bad video"),
+				contentType: "video/mp4",
+			},
+		},
+	}
+	repository := &fakeRepository{}
+	processor := Processor{
+		Repository:      repository,
+		ObjectStore:     objectStore,
+		OriginalsBucket: "originals",
+		PreviewsBucket:  "previews",
+		VideoTranscoder: &fakeVideoTranscoder{err: errObjectNotFound},
+	}
+
+	err := processor.ProcessVideoJob(ctx, VideoJob{
+		MediaAssetID:      6,
+		UploadItemID:      10,
+		UploadBatchID:     3,
+		OriginalObjectKey: "bad.mp4",
+		OriginalFilename:  "bad.mp4",
+	})
+
+	if err == nil {
+		t.Fatal("expected transcoder error")
+	}
+	if repository.failedVideo.MediaAssetID != 6 || repository.failedVideo.UploadItemID != 10 || repository.failedVideo.ErrorMessage == "" {
+		t.Fatalf("expected failed video job to be recorded, got %#v", repository.failedVideo)
+	}
+}
+
 type fakeRepository struct {
-	completed CompletePhotoJobInput
-	failed    FailPhotoJobInput
+	completed      CompletePhotoJobInput
+	failed         FailPhotoJobInput
+	completedVideo CompleteVideoJobInput
+	failedVideo    FailVideoJobInput
 }
 
 func (f *fakeRepository) CompletePhotoJob(_ context.Context, input CompletePhotoJobInput) error {
@@ -108,6 +212,30 @@ func (f *fakeRepository) CompletePhotoJob(_ context.Context, input CompletePhoto
 func (f *fakeRepository) FailPhotoJob(_ context.Context, input FailPhotoJobInput) error {
 	f.failed = input
 	return nil
+}
+
+func (f *fakeRepository) CompleteVideoJob(_ context.Context, input CompleteVideoJobInput) error {
+	f.completedVideo = input
+	return nil
+}
+
+func (f *fakeRepository) FailVideoJob(_ context.Context, input FailVideoJobInput) error {
+	f.failedVideo = input
+	return nil
+}
+
+type fakeVideoTranscoder struct {
+	input  VideoTranscodeInput
+	output VideoTranscodeOutput
+	err    error
+}
+
+func (f *fakeVideoTranscoder) TranscodeVideo(_ context.Context, input VideoTranscodeInput) (VideoTranscodeOutput, error) {
+	f.input = input
+	if f.err != nil {
+		return VideoTranscodeOutput{}, f.err
+	}
+	return f.output, nil
 }
 
 type storedObject struct {

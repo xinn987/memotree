@@ -207,7 +207,17 @@ func (s *MemoryStore) ListTimelineMedia(_ context.Context, input ListTimelineMed
 	}
 	result := []TimelineMedia{}
 	for _, asset := range s.mediaAssets {
-		if asset.FamilyID != input.FamilyID || asset.Status != MediaStatusActive || asset.RenditionStatus != RenditionStatusReady {
+		if asset.FamilyID != input.FamilyID || asset.Status != MediaStatusActive || asset.RenditionStatus != RenditionStatusReady || !asset.DeletedAt.IsZero() {
+			continue
+		}
+		if input.MediaType != "" && asset.MediaType != input.MediaType {
+			continue
+		}
+		sortTime := timelineSortTime(asset)
+		if !input.MonthFrom.IsZero() && (sortTime.Before(input.MonthFrom) || !sortTime.Before(input.MonthTo)) {
+			continue
+		}
+		if !input.AfterTime.IsZero() && (sortTime.After(input.AfterTime) || sortTime.Equal(input.AfterTime) && asset.ID >= input.AfterID) {
 			continue
 		}
 		display, thumbnail, ok := s.readyPreviewRenditions(asset)
@@ -233,6 +243,32 @@ func (s *MemoryStore) ListTimelineMedia(_ context.Context, input ListTimelineMed
 		result = result[:limit]
 	}
 	return result, nil
+}
+
+// FindMediaDetail 返回单个已可展示媒体的详情数据。
+// 不可见、删除或仍在处理中的媒体统一返回 ok=false。
+func (s *MemoryStore) FindMediaDetail(_ context.Context, input FindMediaDetailInput) (MediaDetail, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	asset, ok := s.mediaAssets[input.MediaID]
+	if !ok ||
+		asset.FamilyID != input.FamilyID ||
+		asset.Status != MediaStatusActive ||
+		asset.RenditionStatus != RenditionStatusReady ||
+		!asset.DeletedAt.IsZero() {
+		return MediaDetail{}, false, nil
+	}
+	display, thumbnail, ok := s.readyPreviewRenditions(asset)
+	if !ok {
+		return MediaDetail{}, false, nil
+	}
+	return MediaDetail{
+		Asset:                 asset,
+		UploadedByDisplayName: s.memberDisplayName(asset.FamilyID, asset.UploadedBy),
+		Thumbnail:             thumbnail,
+		Display:               display,
+	}, true, nil
 }
 
 // CreateInvite 创建待使用邀请。
@@ -506,6 +542,10 @@ func (s *MemoryStore) CompleteUploadItem(_ context.Context, input CompleteUpload
 	s.mediaAssets[asset.ID] = asset
 
 	s.nextOriginalID++
+	byteSize := input.ObjectSize
+	if byteSize <= 0 {
+		byteSize = item.ByteSize
+	}
 	original := MediaOriginal{
 		ID:               s.nextOriginalID,
 		MediaAssetID:     asset.ID,
@@ -513,7 +553,7 @@ func (s *MemoryStore) CompleteUploadItem(_ context.Context, input CompleteUpload
 		ObjectKey:        item.ObjectKey,
 		OriginalFilename: item.OriginalFilename,
 		ContentType:      fallbackString(input.ObjectType, item.ContentType),
-		ByteSize:         input.ObjectSize,
+		ByteSize:         byteSize,
 		ChecksumSHA256:   input.ChecksumSHA256,
 		UploadedAt:       now,
 	}
@@ -524,7 +564,7 @@ func (s *MemoryStore) CompleteUploadItem(_ context.Context, input CompleteUpload
 	item.UpdatedAt = now
 	s.uploadItems[item.ID] = item
 
-	batch.Status = UploadBatchStatusProcessing
+	batch = s.recalculateUploadBatch(batch)
 	s.uploadBatches[batch.ID] = batch
 	return batch, item, asset, nil
 }

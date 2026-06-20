@@ -13,13 +13,16 @@ import (
 )
 
 const (
-	// 缩略图用于时间线网格，控制在较小尺寸以降低首屏流量。
+	// 缩略图用于时间线网格，尺寸较小以降低首屏流量。
 	thumbnailMaxSide = 320
 	// 展示图用于详情页和较大预览，避免前端直接加载原图。
 	displayMaxSide = 1600
 )
 
-var errObjectNotFound = errors.New("object not found")
+var (
+	errObjectNotFound             = errors.New("object not found")
+	errVideoTranscoderUnavailable = errors.New("video transcoder is not configured")
+)
 
 // Object 是 Worker 从对象存储读取或写入后的轻量对象信息。
 type Object struct {
@@ -28,7 +31,7 @@ type Object struct {
 	SizeBytes   int64
 }
 
-// ObjectStore 隔离具体 S3/R2/MinIO 实现，便于后续替换对象存储客户端。
+// ObjectStore 隔离具体 S3/R2/MinIO 实现，便于替换对象存储客户端。
 type ObjectStore interface {
 	GetObject(ctx context.Context, bucket string, objectKey string) (Object, error)
 	PutObject(ctx context.Context, bucket string, objectKey string, contentType string, body []byte) (Object, error)
@@ -38,6 +41,8 @@ type ObjectStore interface {
 type Repository interface {
 	CompletePhotoJob(ctx context.Context, input CompletePhotoJobInput) error
 	FailPhotoJob(ctx context.Context, input FailPhotoJobInput) error
+	CompleteVideoJob(ctx context.Context, input CompleteVideoJobInput) error
+	FailVideoJob(ctx context.Context, input FailVideoJobInput) error
 }
 
 // Processor 负责把已上传原文件转换为前端可展示的派生资源。
@@ -46,6 +51,7 @@ type Processor struct {
 	ObjectStore     ObjectStore
 	OriginalsBucket string
 	PreviewsBucket  string
+	VideoTranscoder VideoTranscoder
 	Now             func() time.Time
 }
 
@@ -58,14 +64,24 @@ type PhotoJob struct {
 	OriginalFilename  string
 }
 
+// VideoJob 是已完成原视频上传、等待生成浏览器可播放资源的任务。
+type VideoJob struct {
+	MediaAssetID      int64
+	UploadItemID      int64
+	UploadBatchID     int64
+	OriginalObjectKey string
+	OriginalFilename  string
+}
+
 // RenditionResult 记录 Worker 生成的单个派生资源。
 type RenditionResult struct {
-	RenditionType string
-	ObjectKey     string
-	ContentType   string
-	ByteSize      int64
-	Width         int
-	Height        int
+	RenditionType  string
+	ObjectKey      string
+	ContentType    string
+	ByteSize       int64
+	Width          int
+	Height         int
+	DurationMillis int64
 }
 
 // CompletePhotoJobInput 是照片处理成功后的状态写回载荷。
@@ -88,17 +104,58 @@ type FailPhotoJobInput struct {
 	Now           time.Time
 }
 
+// CompleteVideoJobInput 是视频处理成功后的状态写回载荷。
+type CompleteVideoJobInput struct {
+	MediaAssetID   int64
+	UploadItemID   int64
+	UploadBatchID  int64
+	Width          int
+	Height         int
+	DurationMillis int64
+	Renditions     []RenditionResult
+	Now            time.Time
+}
+
+// FailVideoJobInput 是视频处理失败后的状态写回载荷。
+type FailVideoJobInput struct {
+	MediaAssetID  int64
+	UploadItemID  int64
+	UploadBatchID int64
+	ErrorMessage  string
+	Now           time.Time
+}
+
+// VideoTranscoder 隔离 FFmpeg 命令行，便于 Processor 做单元测试。
+type VideoTranscoder interface {
+	TranscodeVideo(ctx context.Context, input VideoTranscodeInput) (VideoTranscodeOutput, error)
+}
+
+type VideoTranscodeInput struct {
+	Original         []byte
+	OriginalFilename string
+}
+
+type VideoTranscodeOutput struct {
+	Thumbnail       []byte
+	DisplayVideo    []byte
+	Width           int
+	Height          int
+	DurationMillis  int64
+	ThumbnailWidth  int
+	ThumbnailHeight int
+}
+
 // ProcessPhotoJob 生成 thumbnail 和 display image，并将处理结果写回数据库。
 func (p Processor) ProcessPhotoJob(ctx context.Context, job PhotoJob) error {
 	now := p.now()
 	original, err := p.ObjectStore.GetObject(ctx, p.OriginalsBucket, job.OriginalObjectKey)
 	if err != nil {
-		return p.fail(ctx, job, err, now)
+		return p.failPhoto(ctx, job, err, now)
 	}
 
 	src, _, err := image.Decode(bytes.NewReader(original.Body))
 	if err != nil {
-		return p.fail(ctx, job, err, now)
+		return p.failPhoto(ctx, job, err, now)
 	}
 
 	bounds := src.Bounds()
@@ -106,22 +163,22 @@ func (p Processor) ProcessPhotoJob(ctx context.Context, job PhotoJob) error {
 	height := bounds.Dy()
 	thumbnail, err := encodeJPEG(resizeToFit(src, thumbnailMaxSide))
 	if err != nil {
-		return p.fail(ctx, job, err, now)
+		return p.failPhoto(ctx, job, err, now)
 	}
 	display, err := encodeJPEG(resizeToFit(src, displayMaxSide))
 	if err != nil {
-		return p.fail(ctx, job, err, now)
+		return p.failPhoto(ctx, job, err, now)
 	}
 
 	thumbnailKey := fmt.Sprintf("previews/media/%d/thumbnail.jpg", job.MediaAssetID)
 	thumbnailObject, err := p.ObjectStore.PutObject(ctx, p.PreviewsBucket, thumbnailKey, "image/jpeg", thumbnail)
 	if err != nil {
-		return p.fail(ctx, job, err, now)
+		return p.failPhoto(ctx, job, err, now)
 	}
 	displayKey := fmt.Sprintf("previews/media/%d/display.jpg", job.MediaAssetID)
 	displayObject, err := p.ObjectStore.PutObject(ctx, p.PreviewsBucket, displayKey, "image/jpeg", display)
 	if err != nil {
-		return p.fail(ctx, job, err, now)
+		return p.failPhoto(ctx, job, err, now)
 	}
 
 	err = p.Repository.CompletePhotoJob(ctx, CompletePhotoJobInput{
@@ -156,9 +213,87 @@ func (p Processor) ProcessPhotoJob(ctx context.Context, job PhotoJob) error {
 	return nil
 }
 
-func (p Processor) fail(ctx context.Context, job PhotoJob, cause error, now time.Time) error {
+// ProcessVideoJob 生成视频缩略图和 MP4 展示视频，并将处理结果写回数据库。
+func (p Processor) ProcessVideoJob(ctx context.Context, job VideoJob) error {
+	now := p.now()
+	if p.VideoTranscoder == nil {
+		return p.failVideo(ctx, job, errVideoTranscoderUnavailable, now)
+	}
+	original, err := p.ObjectStore.GetObject(ctx, p.OriginalsBucket, job.OriginalObjectKey)
+	if err != nil {
+		return p.failVideo(ctx, job, err, now)
+	}
+	output, err := p.VideoTranscoder.TranscodeVideo(ctx, VideoTranscodeInput{
+		Original:         original.Body,
+		OriginalFilename: job.OriginalFilename,
+	})
+	if err != nil {
+		return p.failVideo(ctx, job, err, now)
+	}
+
+	thumbnailKey := fmt.Sprintf("previews/media/%d/thumbnail.jpg", job.MediaAssetID)
+	thumbnailObject, err := p.ObjectStore.PutObject(ctx, p.PreviewsBucket, thumbnailKey, "image/jpeg", output.Thumbnail)
+	if err != nil {
+		return p.failVideo(ctx, job, err, now)
+	}
+	displayKey := fmt.Sprintf("previews/media/%d/display.mp4", job.MediaAssetID)
+	displayObject, err := p.ObjectStore.PutObject(ctx, p.PreviewsBucket, displayKey, "video/mp4", output.DisplayVideo)
+	if err != nil {
+		return p.failVideo(ctx, job, err, now)
+	}
+
+	err = p.Repository.CompleteVideoJob(ctx, CompleteVideoJobInput{
+		MediaAssetID:   job.MediaAssetID,
+		UploadItemID:   job.UploadItemID,
+		UploadBatchID:  job.UploadBatchID,
+		Width:          output.Width,
+		Height:         output.Height,
+		DurationMillis: output.DurationMillis,
+		Renditions: []RenditionResult{
+			{
+				RenditionType:  "thumbnail",
+				ObjectKey:      thumbnailKey,
+				ContentType:    "image/jpeg",
+				ByteSize:       thumbnailObject.SizeBytes,
+				Width:          output.ThumbnailWidth,
+				Height:         output.ThumbnailHeight,
+				DurationMillis: output.DurationMillis,
+			},
+			{
+				RenditionType:  "display_video",
+				ObjectKey:      displayKey,
+				ContentType:    "video/mp4",
+				ByteSize:       displayObject.SizeBytes,
+				Width:          output.Width,
+				Height:         output.Height,
+				DurationMillis: output.DurationMillis,
+			},
+		},
+		Now: now,
+	})
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p Processor) failPhoto(ctx context.Context, job PhotoJob, cause error, now time.Time) error {
 	message := cause.Error()
 	if err := p.Repository.FailPhotoJob(ctx, FailPhotoJobInput{
+		MediaAssetID:  job.MediaAssetID,
+		UploadItemID:  job.UploadItemID,
+		UploadBatchID: job.UploadBatchID,
+		ErrorMessage:  message,
+		Now:           now,
+	}); err != nil {
+		return err
+	}
+	return cause
+}
+
+func (p Processor) failVideo(ctx context.Context, job VideoJob, cause error, now time.Time) error {
+	message := cause.Error()
+	if err := p.Repository.FailVideoJob(ctx, FailVideoJobInput{
 		MediaAssetID:  job.MediaAssetID,
 		UploadItemID:  job.UploadItemID,
 		UploadBatchID: job.UploadBatchID,

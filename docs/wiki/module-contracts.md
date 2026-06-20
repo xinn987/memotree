@@ -42,6 +42,7 @@ POST /invites/{token}/join
 ```text
 POST /families/{familyId}/media/upload-intents
 GET  /families/{familyId}/uploads/active
+GET  /families/{familyId}/uploads/recent
 GET  /families/{familyId}/uploads/{batchId}
 POST /families/{familyId}/uploads/{batchId}/stop
 POST /families/{familyId}/uploads/{batchId}/items/{itemId}/complete-upload
@@ -61,13 +62,21 @@ POST /families/{familyId}/uploads/{batchId}/items/{itemId}/retry-upload
 - 上传任务查询只返回任务和文件条目摘要，不返回 object key，也不重新生成上传授权 URL。
 - 前端 PUT 原文件失败后调用 `fail-upload` 记录可重试失败；`retry-upload` 会把可重试条目重置为 `waiting` 并返回新的短期 `PUT` 上传 URL。
 - 上传者可以查看和停止自己的上传任务；`admin` 可以查看和停止家庭内成员的上传任务。
+- `uploads/recent` 返回当前用户可见的最近上传任务摘要，用于刷新页面后恢复上传管理入口。
 - 停止上传任务后，已完成条目保留，未完成条目标记为 `cancelled`，该任务不再占用 active 上传槽位。
 - MVP 本地开发使用 MinIO，线上可以使用 R2 或其他 S3-compatible 对象存储；业务代码只依赖 storage adapter。
+
+当前实现状态：
+
+- 已实现 upload intent、直接 PUT 到私有对象存储、complete/fail/retry/stop、active 上传任务和最近上传任务查询。
+- 已实现照片和视频处理 Worker：照片上传完成后生成缩略图/展示图；视频上传完成后通过 FFmpeg 生成缩略图/展示视频；成功后媒体进入时间线。
+- 已实现上传任务 UI 的进度、处理中、失败、停止和刷新后最近任务恢复。
+- 实况照片合并、处理失败后的后端重试入口和媒体删除仍未完成。
 
 ## Timeline
 
 ```text
-GET /families/{familyId}/timeline
+GET /families/{familyId}/timeline?limit={limit}&cursor={cursor}
 GET /families/{familyId}/media/{mediaId}
 ```
 
@@ -76,6 +85,20 @@ GET /families/{familyId}/media/{mediaId}
 - 时间线只返回预览资源授权或可访问引用。
 - 默认按拍摄时间排序，缺失时回退上传时间。
 - 分页必须稳定，不能因新上传导致重复或跳项。
+- `limit` 可选，默认 60，最大 100。
+- `cursor` 是后端返回的 opaque token，前端不解析，下一页请求原样传回。
+- 当还有下一页时响应包含 `nextCursor`；没有下一页时不返回该字段。
+- `mediaType` 可选，支持 `photo`、`video` 和 `live_photo`。
+- `month` 可选，格式为 `YYYY-MM`，按家庭默认时区筛选该月份内的媒体。
+- 媒体详情只返回已处理完成、未删除且有预览资源的媒体；处理中、失败或已删除媒体按不可见处理。
+
+当前实现状态：
+
+- 已实现基础时间线查询和移动端时间线 UI，当前返回处理完成且有预览资源的媒体。
+- 已实现按月份和日期分组展示，当前主要覆盖照片预览资源。
+- 后端/API 已支持稳定 cursor 分页；前端时间线已接入 `nextCursor`，通过“加载更多”增量读取后续页面。
+- 后端/API 已实现媒体详情查询；前端已支持从时间线打开媒体详情页，并按媒体类型展示照片或可播放视频预览。
+- 后端/API 和前端已支持按媒体类型和月份进行轻量筛选。
 
 ## Deferred: Original Download
 

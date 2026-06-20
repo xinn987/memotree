@@ -11,6 +11,7 @@ const toolsDir = path.dirname(currentFile);
 export const repoRoot = path.resolve(toolsDir, "..");
 export const serverDir = path.join(repoRoot, "server");
 export const webDir = path.join(repoRoot, "web");
+export const rootNodeModulesDir = path.join(repoRoot, "node_modules");
 export const composeFile = path.join(repoRoot, "deploy", "docker-compose.dev.yml");
 export const localMySQLDSN = "memotree:memotree@tcp(127.0.0.1:3307)/memotree?parseTime=true";
 export const localStorageEnv = {
@@ -163,6 +164,81 @@ export function spawnWithPrefix(command, args, options = {}) {
   prefixStream(child.stdout, prefix);
   prefixStream(child.stderr, prefix);
   return child;
+}
+
+// resolveManagedFFmpeg 返回 Worker 应使用的 FFmpeg/FFprobe 路径。
+// 显式环境变量优先；否则使用项目根目录 npm 依赖安装的托管二进制。
+export function resolveManagedFFmpeg({
+  root = repoRoot,
+  env = process.env,
+  platform = process.platform,
+  arch = process.arch,
+} = {}) {
+  if (env.FFMPEG_PATH && env.FFPROBE_PATH) {
+    return {
+      FFMPEG_PATH: env.FFMPEG_PATH,
+      FFPROBE_PATH: env.FFPROBE_PATH,
+    };
+  }
+
+  const ffmpegPath = firstExisting(ffmpegCandidates(root, platform, arch));
+  const ffprobePath = firstExisting(ffprobeCandidates(root, platform, arch));
+  if (!ffmpegPath || !ffprobePath) {
+    return {};
+  }
+  return {
+    FFMPEG_PATH: ffmpegPath,
+    FFPROBE_PATH: ffprobePath,
+  };
+}
+
+// ensureManagedFFmpegEnv 会自动安装根目录 npm 工具依赖，并把 FFmpeg 路径注入给 Worker。
+export function ensureManagedFFmpegEnv(env = projectEnv()) {
+  const explicit = resolveManagedFFmpeg({ env });
+  if (explicit.FFMPEG_PATH && explicit.FFPROBE_PATH) {
+    return { ...env, ...explicit };
+  }
+
+  ensureRootNodeDependencies();
+  const resolved = resolveManagedFFmpeg({ env: {} });
+  if (!resolved.FFMPEG_PATH || !resolved.FFPROBE_PATH) {
+    throw new Error("Unable to locate project-managed FFmpeg. Run npm ci at the repository root and retry.");
+  }
+  return { ...env, ...resolved };
+}
+
+export function ensureWorkspaceToolDependencies() {
+  ensureRootNodeDependencies();
+}
+
+function ensureRootNodeDependencies() {
+  const resolved = resolveManagedFFmpeg({ env: {} });
+  if (resolved.FFMPEG_PATH && resolved.FFPROBE_PATH) {
+    return;
+  }
+  run("npm", ["ci"], { cwd: repoRoot });
+}
+
+function ffmpegCandidates(root, platform, arch) {
+  const binaryName = platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+  const installerPlatform = `${platform}-${arch}`;
+  return [
+    path.join(root, "node_modules", "@ffmpeg-installer", installerPlatform, binaryName),
+    path.join(root, "node_modules", "@ffmpeg-installer", "ffmpeg", "node_modules", "@ffmpeg-installer", installerPlatform, binaryName),
+  ];
+}
+
+function ffprobeCandidates(root, platform, arch) {
+  const binaryName = platform === "win32" ? "ffprobe.exe" : "ffprobe";
+  const platformDir = platform === "darwin" ? "darwin" : platform;
+  return [
+    path.join(root, "node_modules", "ffprobe-static", "bin", platformDir, arch, binaryName),
+    path.join(root, "node_modules", "ffprobe-static", binaryName),
+  ];
+}
+
+function firstExisting(candidates) {
+  return candidates.find((candidate) => existsSync(candidate)) ?? "";
 }
 
 export async function waitForHTTP(url, { timeoutMs = 30_000, intervalMs = 500, name = "service", child } = {}) {

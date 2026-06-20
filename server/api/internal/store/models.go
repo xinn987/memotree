@@ -17,6 +17,7 @@ const (
 	MemberRoleAdmin       = "admin"
 	MemberRoleMember      = "member"
 	MemberStatusActive    = "active"
+	MemberStatusRemoved   = "removed"
 	InviteStatusPending   = "pending"
 	InviteStatusUsed      = "used"
 	InviteStatusRevoked   = "revoked"
@@ -173,6 +174,15 @@ type TimelineMedia struct {
 	Display               MediaRendition
 }
 
+// MediaDetail 是媒体详情页读取的聚合结果。
+// 它和时间线一样只返回展示资源，不携带原文件 object key。
+type MediaDetail struct {
+	Asset                 MediaAsset
+	UploadedByDisplayName string
+	Thumbnail             MediaRendition
+	Display               MediaRendition
+}
+
 // UploadBatch 表示一次可返回查看的上传任务，不作为时间线浏览对象。
 // ActiveSlot 用于 MySQL 唯一键约束同一用户同一家庭最多一个 active 任务。
 type UploadBatch struct {
@@ -253,10 +263,20 @@ type ListUploadBatchesInput struct {
 }
 
 // ListTimelineMediaInput 表示时间线读取边界。
-// MVP 先只支持按家庭读取最近若干条，分页游标会在后续时间线任务中补齐。
+// AfterTime/AfterID 是基于时间线倒序排序的游标，用于稳定读取下一页。
 type ListTimelineMediaInput struct {
+	FamilyID  int64
+	Limit     int
+	AfterTime time.Time
+	AfterID   int64
+	MediaType string
+	MonthFrom time.Time
+	MonthTo   time.Time
+}
+
+type FindMediaDetailInput struct {
 	FamilyID int64
-	Limit    int
+	MediaID  int64
 }
 
 // Store 是 HTTP/领域逻辑访问持久化数据的唯一接口。
@@ -273,6 +293,7 @@ type Store interface {
 	IsActiveMember(ctx context.Context, familyID int64, userID int64) (bool, error)
 	IsActiveAdmin(ctx context.Context, familyID int64, userID int64) (bool, error)
 	ListTimelineMedia(ctx context.Context, input ListTimelineMediaInput) ([]TimelineMedia, error)
+	FindMediaDetail(ctx context.Context, input FindMediaDetailInput) (MediaDetail, bool, error)
 	CreateInvite(ctx context.Context, familyID int64, tokenHash string, tokenPlaintext string, createdBy int64, memberDisplayName string, expiresAt time.Time) (FamilyInvite, error)
 	ListInvitesForFamily(ctx context.Context, familyID int64) ([]FamilyInvite, error)
 	RevokeInvite(ctx context.Context, familyID int64, inviteID int64, now time.Time) (FamilyInvite, error)

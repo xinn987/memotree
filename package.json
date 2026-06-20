@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "name": "memotree-workspace-tools",
+  "version": "0.1.0",
+  "description": "Workspace-level tools for MemoTree local development.",
+  "devDependencies": {
+    "@ffmpeg-installer/ffmpeg": "1.1.0",
+    "ffprobe-static": "3.1.0"
+  }
+}

@@ -10,12 +10,15 @@ import (
 func TestRunnerRunOnceClaimsAndProcessesPhotoJobs(t *testing.T) {
 	ctx := context.Background()
 	repository := &fakeJobRepository{
-		jobs: []PhotoJob{
+		photoJobs: []PhotoJob{
 			{MediaAssetID: 1, UploadItemID: 10, UploadBatchID: 100},
 			{MediaAssetID: 2, UploadItemID: 20, UploadBatchID: 200},
 		},
+		videoJobs: []VideoJob{
+			{MediaAssetID: 3, UploadItemID: 30, UploadBatchID: 300},
+		},
 	}
-	processor := &fakePhotoProcessor{}
+	processor := &fakeMediaProcessor{}
 	runner := Runner{
 		Repository: repository,
 		Processor:  processor,
@@ -27,14 +30,17 @@ func TestRunnerRunOnceClaimsAndProcessesPhotoJobs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run once: %v", err)
 	}
-	if processed != 2 {
-		t.Fatalf("expected 2 processed jobs, got %d", processed)
+	if processed != 3 {
+		t.Fatalf("expected 3 processed jobs, got %d", processed)
 	}
 	if repository.claimLimit != 5 {
 		t.Fatalf("expected claim limit 5, got %d", repository.claimLimit)
 	}
-	if len(processor.jobs) != 2 || processor.jobs[0].MediaAssetID != 1 || processor.jobs[1].MediaAssetID != 2 {
-		t.Fatalf("expected processor to receive jobs, got %#v", processor.jobs)
+	if len(processor.photoJobs) != 2 || processor.photoJobs[0].MediaAssetID != 1 || processor.photoJobs[1].MediaAssetID != 2 {
+		t.Fatalf("expected processor to receive photo jobs, got %#v", processor.photoJobs)
+	}
+	if len(processor.videoJobs) != 1 || processor.videoJobs[0].MediaAssetID != 3 {
+		t.Fatalf("expected processor to receive video jobs, got %#v", processor.videoJobs)
 	}
 }
 
@@ -43,11 +49,11 @@ func TestRunnerRunOnceLogsClaimedJobsAndProgress(t *testing.T) {
 	logger := &fakeLogger{}
 	runner := Runner{
 		Repository: &fakeJobRepository{
-			jobs: []PhotoJob{
+			photoJobs: []PhotoJob{
 				{MediaAssetID: 1, UploadItemID: 10, UploadBatchID: 100},
 			},
 		},
-		Processor: &fakePhotoProcessor{},
+		Processor: &fakeMediaProcessor{},
 		Logger:    logger,
 	}
 
@@ -60,7 +66,7 @@ func TestRunnerRunOnceLogsClaimedJobsAndProgress(t *testing.T) {
 		t.Fatalf("expected one processed job, got %d", processed)
 	}
 	logs := strings.Join(logger.lines, "\n")
-	for _, expected := range []string{"tick claimed=1", "job start", "mediaAssetID=1", "uploadItemID=10", "job success"} {
+	for _, expected := range []string{"tick claimedPhotos=1 claimedVideos=0", "job start mediaType=photo", "mediaAssetID=1", "uploadItemID=10", "job success mediaType=photo"} {
 		if !strings.Contains(logs, expected) {
 			t.Fatalf("expected logs to contain %q, got:\n%s", expected, logs)
 		}
@@ -69,21 +75,33 @@ func TestRunnerRunOnceLogsClaimedJobsAndProgress(t *testing.T) {
 
 type fakeJobRepository struct {
 	fakeRepository
-	jobs       []PhotoJob
+	photoJobs  []PhotoJob
+	videoJobs  []VideoJob
 	claimLimit int
 }
 
 func (f *fakeJobRepository) ClaimPhotoJobs(_ context.Context, limit int) ([]PhotoJob, error) {
 	f.claimLimit = limit
-	return f.jobs, nil
+	return f.photoJobs, nil
 }
 
-type fakePhotoProcessor struct {
-	jobs []PhotoJob
+func (f *fakeJobRepository) ClaimVideoJobs(_ context.Context, limit int) ([]VideoJob, error) {
+	f.claimLimit = limit
+	return f.videoJobs, nil
 }
 
-func (f *fakePhotoProcessor) ProcessPhotoJob(_ context.Context, job PhotoJob) error {
-	f.jobs = append(f.jobs, job)
+type fakeMediaProcessor struct {
+	photoJobs []PhotoJob
+	videoJobs []VideoJob
+}
+
+func (f *fakeMediaProcessor) ProcessPhotoJob(_ context.Context, job PhotoJob) error {
+	f.photoJobs = append(f.photoJobs, job)
+	return nil
+}
+
+func (f *fakeMediaProcessor) ProcessVideoJob(_ context.Context, job VideoJob) error {
+	f.videoJobs = append(f.videoJobs, job)
 	return nil
 }
 

@@ -19,6 +19,8 @@ type Config struct {
 	StorageUsePathStyle bool
 	OriginalsBucket     string
 	PreviewsBucket      string
+	FFmpegPath          string
+	FFprobePath         string
 }
 
 func Load() Config {
@@ -34,6 +36,8 @@ func Load() Config {
 		StorageUsePathStyle: getEnvBool("STORAGE_USE_PATH_STYLE", false),
 		OriginalsBucket:     getEnv("STORAGE_BUCKET_ORIGINALS", "memotree-originals"),
 		PreviewsBucket:      getEnv("STORAGE_BUCKET_PREVIEWS", "memotree-previews"),
+		FFmpegPath:          getEnv("FFMPEG_PATH", "ffmpeg"),
+		FFprobePath:         getEnv("FFPROBE_PATH", "ffprobe"),
 	}
 }
 

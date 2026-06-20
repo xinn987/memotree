@@ -30,6 +30,12 @@ func main() {
 	}
 
 	ctx := context.Background()
+	videoTools, err := media.CheckVideoTools(ctx, cfg.FFmpegPath, cfg.FFprobePath)
+	if err != nil {
+		log.Fatalf("video processing dependencies are unavailable: %v", err)
+	}
+	log.Printf("video processing dependencies ready ffmpeg=%q ffprobe=%q", videoTools.FFmpeg, videoTools.FFprobe)
+
 	db, err := sql.Open("mysql", cfg.MySQLDSN)
 	if err != nil {
 		log.Fatalf("open mysql: %v", err)
@@ -56,6 +62,10 @@ func main() {
 		ObjectStore:     media.S3ObjectStore{Service: s3Storage},
 		OriginalsBucket: cfg.OriginalsBucket,
 		PreviewsBucket:  cfg.PreviewsBucket,
+		VideoTranscoder: media.FFmpegTranscoder{
+			Path:        cfg.FFmpegPath,
+			FFprobePath: cfg.FFprobePath,
+		},
 	}
 	runner := media.Runner{
 		Repository:   repository,

@@ -19,7 +19,7 @@ node tools/help.mjs
 
 ## 一键启动
 
-启动 Docker 依赖、API 和前端：
+启动 Docker 依赖、API、Worker 和前端：
 
 ```bash
 node tools/dev.mjs
@@ -31,7 +31,9 @@ node tools/dev.mjs
 node tools/dev.mjs --memory
 ```
 
-`dev.mjs` 会在同一个终端里输出 `[api]` 和 `[web]` 前缀日志。脚本会先启动 API，等 `http://127.0.0.1:8080/healthz` 返回成功后再启动前端，避免 Vite 代理在 API 未就绪时反复报 `ECONNREFUSED`。按 `Ctrl+C` 会同时停止 API 和前端进程。
+`dev.mjs` 会在同一个终端里输出 `[api]`、`[worker]` 和 `[web]` 前缀日志。脚本会先启动 API，等 `http://127.0.0.1:8080/healthz` 返回成功后再启动 Worker 和前端，避免 Vite 代理在 API 未就绪时反复报 `ECONNREFUSED`。按 `Ctrl+C` 会同时停止 API、Worker 和前端进程。
+
+`node tools/dev.mjs --memory` 只启动 API 和前端，不启动 Docker 依赖或 Worker；上传、对象存储和媒体处理流程需要使用普通 MySQL/MinIO 开发模式。
 
 API 默认占用 `8080`，前端默认占用 `5173`。如果端口已经被占用，启动脚本会打印占用端口的 PID 和进程名；确认是旧开发进程后，可以显式清理端口再启动：
 
@@ -107,6 +109,8 @@ node tools/dev-logs.mjs
 node tools/dev-logs.mjs --follow
 ```
 
+`dev-logs.mjs` 只查看 Docker 依赖日志，包括 MySQL 和 MinIO。Go 服务自己的日志由服务进程统一落盘，见下方“服务日志”。
+
 ## 启动 API
 
 使用内存 store，重启后数据会丢：
@@ -135,6 +139,24 @@ API 检测到 `MYSQL_DSN` 后会连接 MySQL，并自动应用 `server/migration
 node tools/run-api.mjs --kill-ports
 ```
 
+## 服务日志
+
+API、Worker 和本地对象存储初始化命令都使用 Go 侧统一日志模块写文件，同时保留终端输出。默认日志目录是：
+
+```text
+server/logs/
+```
+
+默认文件名：
+
+```text
+server/logs/api.log
+server/logs/worker.log
+server/logs/init-storage.log
+```
+
+可以通过 `LOG_DIR` 覆盖日志目录。排查接口 500、Worker 处理卡住、MinIO bucket 初始化失败时，优先查看这些服务日志；排查 MySQL/MinIO 容器自身问题时，再用 `node tools/dev-logs.mjs`。
+
 ## 启动前端
 
 ```bash
@@ -153,7 +175,7 @@ node tools/run-web.mjs --kill-ports
 
 Family Access 当前已经可以在本地完整测试：
 
-1. 运行 `node tools/dev.mjs --kill-ports` 启动 API、前端和本地依赖。
+1. 运行 `node tools/dev.mjs --kill-ports` 启动本地依赖、API、Worker 和前端。
 2. 打开 `http://localhost:5173`。
 3. 注册第一个账号；第一个账号会成为系统初始管理员。
 4. 创建一个家庭；创建者会自动成为该家庭的 `admin`。
@@ -170,10 +192,34 @@ Family Access 当前已经可以在本地完整测试：
 - `used`、`revoked` 和 `expired` 邀请不可复制。
 - MVP 当前会为待使用邀请保存 `token_plaintext`，用于刷新后重新复制；邀请被使用或撤销后会清空 token 原文。
 
+媒体上传和时间线当前可以在本地测试照片和视频流程：
+
+1. 使用普通 `node tools/dev.mjs --kill-ports` 启动，不使用 `--memory`。
+2. 登录并进入 `http://localhost:5173/families/{familyId}/timeline`。
+3. 在“上传精选”中选择 JPG、PNG 等照片文件。
+4. 前端会先请求 `upload-intents` 创建上传任务和短期 PUT URL，再直接 PUT 到 MinIO。
+5. PUT 成功后前端调用 `complete-upload`，后端确认对象存在并创建媒体元数据。
+6. Worker 轮询待处理照片，生成缩略图和展示图，成功后写入 `server/logs/worker.log`。
+7. 时间线只展示处理完成的媒体；处理中或失败项留在上传任务视图里。
+8. 刷新页面后，“最近上传”会从后端读取最近上传任务，不依赖前端内存状态。
+9. 可在时间线顶部按媒体类型或月份筛选；前端会把 `mediaType` 和 `month=YYYY-MM` 传给后端重新读取第一页。
+10. 点击时间线中的照片或视频，可进入 `/families/{familyId}/media/{mediaId}` 媒体详情页，查看展示资源和基础元数据。
+
+当前限制：
+
+- 照片缩略图/展示图、视频缩略图/展示视频流程已实现；`node tools/run-worker.mjs` 会自动准备项目根目录 npm 托管的 FFmpeg/FFprobe，并注入 `FFMPEG_PATH`、`FFPROBE_PATH`。如需使用自定义二进制，也可以显式设置这两个环境变量。
+- 时间线后端/API 已支持 `limit` + `cursor` 稳定分页；前端时间线底部会在存在下一页时显示“加载更多”。
+- 移动端上传、时间线浏览和视频详情仍需要执行一次浏览器 smoke test。
+- 原文件下载入口和下载 API 明确后置，前端不会拿到原文件 object key 或永久公开 URL。
+
 ## Worker
 
-Worker 负责轮询 MySQL 中待处理的照片媒体，生成缩略图和展示图并写入预览 bucket。普通 MySQL 开发模式会由 `node tools/dev.mjs` 自动启动；如需单独启动：
+Worker 负责轮询 MySQL 中待处理的照片和视频媒体，照片会生成缩略图/展示图，视频会通过 FFmpeg 生成缩略图/展示视频，并写入预览 bucket。普通 MySQL 开发模式会由 `node tools/dev.mjs` 自动启动；如需单独启动：
 
 ```bash
 node tools/run-worker.mjs
 ```
+
+Worker 目前使用进程内 ticker 轮询 MySQL。后续如果切换到 Redis 或队列，API 会在上传完成后投递处理任务，Worker 消费队列并用数据库状态保证幂等；在那之前，MySQL 状态仍是处理进度和重试的事实来源。
+
+生产部署时，Worker 镜像应内置 FFmpeg/FFprobe，参考 `deploy/worker.Dockerfile`。Worker 启动阶段会执行版本检查并写入日志；依赖不可用时直接启动失败，避免领取视频任务后把用户媒体标为处理失败。

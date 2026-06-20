@@ -514,6 +514,14 @@ func (s *MySQLStore) ListTimelineMedia(ctx context.Context, input ListTimelineMe
 	if limit <= 0 {
 		limit = 60
 	}
+	cursorEnabled := 0
+	if !input.AfterTime.IsZero() {
+		cursorEnabled = 1
+	}
+	monthFilterEnabled := 0
+	if !input.MonthFrom.IsZero() {
+		monthFilterEnabled = 1
+	}
 	rows, err := s.db.QueryContext(ctx, `
 SELECT
   ma.id, ma.family_id, ma.uploaded_by, ma.media_type, ma.status, ma.rendition_status, ma.captured_at, ma.uploaded_at, ma.deleted_at,
@@ -533,6 +541,9 @@ WHERE ma.family_id = ?
   AND ma.status = ?
   AND ma.rendition_status = ?
   AND ma.deleted_at IS NULL
+  AND (? = '' OR ma.media_type = ?)
+  AND (? = 0 OR (COALESCE(ma.captured_at, ma.uploaded_at) >= ? AND COALESCE(ma.captured_at, ma.uploaded_at) < ?))
+  AND (? = 0 OR COALESCE(ma.captured_at, ma.uploaded_at) < ? OR (COALESCE(ma.captured_at, ma.uploaded_at) = ? AND ma.id < ?))
 ORDER BY COALESCE(ma.captured_at, ma.uploaded_at) DESC, ma.id DESC
 LIMIT ?
 `,
@@ -545,6 +556,15 @@ LIMIT ?
 		input.FamilyID,
 		MediaStatusActive,
 		RenditionStatusReady,
+		input.MediaType,
+		input.MediaType,
+		monthFilterEnabled,
+		input.MonthFrom.UTC(),
+		input.MonthTo.UTC(),
+		cursorEnabled,
+		input.AfterTime.UTC(),
+		input.AfterTime.UTC(),
+		input.AfterID,
 		limit,
 	)
 	if err != nil {
@@ -561,6 +581,55 @@ LIMIT ?
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+// FindMediaDetail 返回单个已可展示媒体的详情数据。
+// SQL 层过滤 deleted、processing 和 failed 媒体，避免 HTTP 层误暴露不可见资源。
+func (s *MySQLStore) FindMediaDetail(ctx context.Context, input FindMediaDetailInput) (MediaDetail, bool, error) {
+	item, err := scanTimelineMedia(s.db.QueryRowContext(ctx, `
+SELECT
+  ma.id, ma.family_id, ma.uploaded_by, ma.media_type, ma.status, ma.rendition_status, ma.captured_at, ma.uploaded_at, ma.deleted_at,
+  COALESCE(NULLIF(fm.display_name, ''), u.display_name) AS uploaded_by_display_name,
+  d.id, d.media_asset_id, d.rendition_type, d.object_key, d.content_type, d.byte_size, d.width, d.height, d.duration_millis, d.status, d.error_message,
+  t.id, t.media_asset_id, t.rendition_type, t.object_key, t.content_type, t.byte_size, t.width, t.height, t.duration_millis, t.status, t.error_message
+FROM media_assets ma
+JOIN users u ON u.id = ma.uploaded_by
+LEFT JOIN family_members fm ON fm.family_id = ma.family_id AND fm.user_id = ma.uploaded_by
+JOIN media_renditions d ON d.media_asset_id = ma.id
+  AND d.status = ?
+  AND d.rendition_type = CASE WHEN ma.media_type = ? THEN ? ELSE ? END
+LEFT JOIN media_renditions t ON t.media_asset_id = ma.id
+  AND t.status = ?
+  AND t.rendition_type = ?
+WHERE ma.id = ?
+  AND ma.family_id = ?
+  AND ma.status = ?
+  AND ma.rendition_status = ?
+  AND ma.deleted_at IS NULL
+`,
+		RenditionStatusReady,
+		MediaTypeVideo,
+		RenditionTypeDisplayVideo,
+		RenditionTypeDisplayImage,
+		RenditionStatusReady,
+		RenditionTypeThumbnail,
+		input.MediaID,
+		input.FamilyID,
+		MediaStatusActive,
+		RenditionStatusReady,
+	))
+	if errors.Is(err, sql.ErrNoRows) {
+		return MediaDetail{}, false, nil
+	}
+	if err != nil {
+		return MediaDetail{}, false, err
+	}
+	return MediaDetail{
+		Asset:                 item.Asset,
+		UploadedByDisplayName: item.UploadedByDisplayName,
+		Thumbnail:             item.Thumbnail,
+		Display:               item.Display,
+	}, true, nil
 }
 
 // FindUploadBatch 按家庭和任务 ID 读取上传任务。
@@ -780,18 +849,14 @@ WHERE id = ?
 `, mediaID, UploadItemStatusProcessing, now.UTC(), item.ID); err != nil {
 		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `
-UPDATE upload_batches
-SET status = ?
-WHERE id = ?
-`, UploadBatchStatusProcessing, batch.ID); err != nil {
+	batch, err = recalculateUploadBatchInTx(ctx, tx, batch)
+	if err != nil {
 		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return UploadBatch{}, UploadItem{}, MediaAsset{}, err
 	}
 
-	batch.Status = UploadBatchStatusProcessing
 	item.MediaAssetID = mediaID
 	item.Status = UploadItemStatusProcessing
 	item.UpdatedAt = now

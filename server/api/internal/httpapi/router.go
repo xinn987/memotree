@@ -6,6 +6,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -69,6 +70,7 @@ func NewRouterWithDependencies(cfg config.Config, appStore store.Store, storageS
 	mux.HandleFunc("POST /families", api.requireAuth(api.createFamily))
 	mux.HandleFunc("GET /families", api.requireAuth(api.listFamilies))
 	mux.HandleFunc("GET /families/{familyId}/timeline", api.requireAuth(api.listTimeline))
+	mux.HandleFunc("GET /families/{familyId}/media/{mediaId}", api.requireAuth(api.getMediaDetail))
 	mux.HandleFunc("POST /families/{familyId}/invites", api.requireAuth(api.createInvite))
 	mux.HandleFunc("GET /families/{familyId}/invites", api.requireAuth(api.listInvites))
 	mux.HandleFunc("DELETE /families/{familyId}/invites/{inviteId}", api.requireAuth(api.revokeInvite))
@@ -376,18 +378,82 @@ func (a *app) listTimeline(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "对象存储尚未配置")
 		return
 	}
+	page, err := parseTimelinePage(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	items, err := a.store.ListTimelineMedia(r.Context(), store.ListTimelineMediaInput{
-		FamilyID: familyID,
-		Limit:    60,
+		FamilyID:  familyID,
+		Limit:     page.Limit + 1,
+		AfterTime: page.AfterTime,
+		AfterID:   page.AfterID,
+		MediaType: page.MediaType,
+		MonthFrom: page.MonthFrom,
+		MonthTo:   page.MonthTo,
 	})
 	if err != nil {
 		writeInternalError(w, r, "读取时间线失败", err)
 		return
 	}
+	var nextCursor string
+	if len(items) > page.Limit {
+		last := items[page.Limit-1].Asset
+		nextCursor = encodeTimelineCursor(timelineMediaTime(last), last.ID)
+		items = items[:page.Limit]
+	}
 	response, err := a.timelineResponse(r.Context(), items)
 	if err != nil {
 		writeInternalError(w, r, "生成预览访问链接失败", err)
+		return
+	}
+	if nextCursor != "" {
+		response["nextCursor"] = nextCursor
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (a *app) getMediaDetail(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	mediaID, err := parsePathID(r, "mediaId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "媒体 ID 不合法")
+		return
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以查看媒体")
+		return
+	}
+	if a.storage == nil {
+		writeError(w, http.StatusServiceUnavailable, "对象存储尚未配置")
+		return
+	}
+	detail, ok, err := a.store.FindMediaDetail(r.Context(), store.FindMediaDetailInput{
+		FamilyID: familyID,
+		MediaID:  mediaID,
+	})
+	if err != nil {
+		writeInternalError(w, r, "读取媒体详情失败", err)
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "媒体不存在")
+		return
+	}
+	response, err := a.mediaDetailResponse(r.Context(), detail)
+	if err != nil {
+		writeInternalError(w, r, "生成媒体详情访问链接失败", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -1146,6 +1212,97 @@ func (a *app) timelineResponse(ctx context.Context, items []store.TimelineMedia)
 		groups[groupIndex]["items"] = append(groupItems, responseItem)
 	}
 	return map[string]any{"groups": groups}, nil
+}
+
+type timelinePage struct {
+	Limit     int
+	AfterTime time.Time
+	AfterID   int64
+	MediaType string
+	MonthFrom time.Time
+	MonthTo   time.Time
+}
+
+func parseTimelinePage(r *http.Request) (timelinePage, error) {
+	const (
+		defaultLimit = 60
+		maxLimit     = 100
+	)
+	page := timelinePage{Limit: defaultLimit}
+	query := r.URL.Query()
+	if rawLimit := strings.TrimSpace(query.Get("limit")); rawLimit != "" {
+		limit, err := strconv.Atoi(rawLimit)
+		if err != nil || limit <= 0 || limit > maxLimit {
+			return timelinePage{}, fmt.Errorf("时间线分页大小不合法")
+		}
+		page.Limit = limit
+	}
+	if rawCursor := strings.TrimSpace(query.Get("cursor")); rawCursor != "" {
+		afterTime, afterID, err := decodeTimelineCursor(rawCursor)
+		if err != nil {
+			return timelinePage{}, fmt.Errorf("时间线分页游标不合法")
+		}
+		page.AfterTime = afterTime
+		page.AfterID = afterID
+	}
+	if rawMediaType := strings.TrimSpace(query.Get("mediaType")); rawMediaType != "" {
+		if rawMediaType != store.MediaTypePhoto && rawMediaType != store.MediaTypeVideo && rawMediaType != store.MediaTypeLivePhoto {
+			return timelinePage{}, fmt.Errorf("时间线媒体类型筛选不合法")
+		}
+		page.MediaType = rawMediaType
+	}
+	if rawMonth := strings.TrimSpace(query.Get("month")); rawMonth != "" {
+		location, err := time.LoadLocation(store.DefaultFamilyTimezone)
+		if err != nil {
+			location = time.Local
+		}
+		monthFrom, err := time.ParseInLocation("2006-01", rawMonth, location)
+		if err != nil {
+			return timelinePage{}, fmt.Errorf("时间线月份筛选不合法")
+		}
+		page.MonthFrom = monthFrom
+		page.MonthTo = monthFrom.AddDate(0, 1, 0)
+	}
+	return page, nil
+}
+
+func encodeTimelineCursor(sortTime time.Time, id int64) string {
+	// 游标内容是 HTTP 层细节；前端只把它当作 opaque token 原样传回。
+	payload := sortTime.UTC().Format(time.RFC3339Nano) + "|" + strconv.FormatInt(id, 10)
+	return base64.RawURLEncoding.EncodeToString([]byte(payload))
+}
+
+func decodeTimelineCursor(cursor string) (time.Time, int64, error) {
+	decoded, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	parts := strings.SplitN(string(decoded), "|", 2)
+	if len(parts) != 2 {
+		return time.Time{}, 0, fmt.Errorf("invalid cursor")
+	}
+	sortTime, err := time.Parse(time.RFC3339Nano, parts[0])
+	if err != nil {
+		return time.Time{}, 0, err
+	}
+	id, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || id <= 0 {
+		return time.Time{}, 0, fmt.Errorf("invalid cursor")
+	}
+	return sortTime.UTC(), id, nil
+}
+
+func (a *app) mediaDetailResponse(ctx context.Context, detail store.MediaDetail) (map[string]any, error) {
+	item, err := a.timelineItemResponse(ctx, store.TimelineMedia{
+		Asset:                 detail.Asset,
+		UploadedByDisplayName: detail.UploadedByDisplayName,
+		Thumbnail:             detail.Thumbnail,
+		Display:               detail.Display,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"media": item}, nil
 }
 
 func (a *app) timelineItemResponse(ctx context.Context, item store.TimelineMedia) (map[string]any, error) {

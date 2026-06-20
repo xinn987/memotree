@@ -1,6 +1,7 @@
 import { Component, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import {
   AlertCircle,
+  ArrowLeft,
   Check,
   Copy,
   FileImage,
@@ -115,6 +116,8 @@ type TimelineMedia = {
   display: TimelineRendition;
 };
 
+type TimelineMediaTypeFilter = "" | TimelineMedia["mediaType"];
+
 type TimelineGroup = {
   month: string;
   date: string;
@@ -124,10 +127,21 @@ type TimelineGroup = {
 
 type TimelineResponse = {
   groups: TimelineGroup[];
+  nextCursor?: string;
+};
+
+type MediaDetailResponse = {
+  media: TimelineMedia;
+};
+
+type AppRoute = {
+  familyId: number | null;
+  mediaId: number | null;
 };
 
 // 上传处理由后端 Worker 异步完成，前端用短轮询把处理结果回填到任务视图。
 const uploadTaskPollIntervalMs = 2000;
+const timelinePageSize = 30;
 
 type SessionResponse =
   | { authenticated: false }
@@ -173,10 +187,23 @@ export function App() {
   const [families, setFamilies] = useState<Family[]>([]);
   const [selectedFamilyId, setSelectedFamilyId] = useState<number | null>(null);
   const [message, setMessage] = useState("");
+  const [route, setRoute] = useState<AppRoute>(() => parseAppRoute());
 
   useEffect(() => {
     void refreshSession();
   }, []);
+
+  useEffect(() => {
+    const handlePopState = () => setRoute(parseAppRoute());
+    window.addEventListener("popstate", handlePopState);
+    return () => window.removeEventListener("popstate", handlePopState);
+  }, []);
+
+  useEffect(() => {
+    if (route.familyId && families.some((family) => family.id === route.familyId)) {
+      setSelectedFamilyId(route.familyId);
+    }
+  }, [families, route.familyId]);
 
   const selectedFamily = useMemo(
     () => families.find((family) => family.id === selectedFamilyId) ?? families[0] ?? null,
@@ -190,9 +217,11 @@ export function App() {
       if (session.authenticated) {
         // 后端契约要求 families 始终是数组；这里仍做防御，避免异常响应导致白屏。
         const visibleFamilies = session.families ?? [];
+        const routedFamilyId =
+          route.familyId && visibleFamilies.some((family) => family.id === route.familyId) ? route.familyId : null;
         setUser(session.user);
         setFamilies(visibleFamilies);
-        setSelectedFamilyId((current) => current ?? visibleFamilies[0]?.id ?? null);
+        setSelectedFamilyId((current) => routedFamilyId ?? current ?? visibleFamilies[0]?.id ?? null);
       } else {
         setUser(null);
         setFamilies([]);
@@ -210,6 +239,11 @@ export function App() {
     setUser(null);
     setFamilies([]);
     setSelectedFamilyId(null);
+  }
+
+  function navigateTo(path: string) {
+    window.history.pushState({}, "", path);
+    setRoute(parseAppRoute());
   }
 
   if (loading) {
@@ -252,7 +286,11 @@ export function App() {
           <span>家庭</span>
           <select
             value={selectedFamily?.id ?? ""}
-            onChange={(event) => setSelectedFamilyId(Number(event.target.value))}
+            onChange={(event) => {
+              const familyID = Number(event.target.value);
+              setSelectedFamilyId(familyID);
+              navigateTo(`/families/${familyID}/timeline`);
+            }}
           >
             {families.map((family) => (
               <option key={family.id} value={family.id}>
@@ -263,10 +301,18 @@ export function App() {
         </label>
       )}
 
-      {selectedFamily ? (
+      {selectedFamily && route.mediaId && route.familyId === selectedFamily.id ? (
+        <MediaDetailPage
+          family={selectedFamily}
+          mediaId={route.mediaId}
+          onBack={() => navigateTo(`/families/${selectedFamily.id}/timeline`)}
+          onMessage={setMessage}
+        />
+      ) : selectedFamily ? (
         <FamilyHome
           family={selectedFamily}
           onMessage={setMessage}
+          onOpenMedia={(mediaId) => navigateTo(`/families/${selectedFamily.id}/media/${mediaId}`)}
         />
       ) : (
         <Onboarding onChanged={refreshSession} onMessage={setMessage} />
@@ -408,12 +454,126 @@ function Onboarding({ onChanged, onMessage }: { onChanged: () => Promise<void>; 
   );
 }
 
-function FamilyHome({
+function MediaDetailPage({
   family,
+  mediaId,
+  onBack,
   onMessage,
 }: {
   family: Family;
+  mediaId: number;
+  onBack: () => void;
   onMessage: (value: string) => void;
+}) {
+  const [media, setMedia] = useState<TimelineMedia | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    setMedia(null);
+
+    async function loadMediaDetail() {
+      try {
+        const detail = await request<MediaDetailResponse>(`/families/${family.id}/media/${mediaId}`);
+        if (!active) {
+          return;
+        }
+        setMedia(detail.media);
+        onMessage("");
+      } catch (error) {
+        if (active) {
+          setError(getErrorMessage(error));
+        }
+      } finally {
+        if (active) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadMediaDetail();
+    return () => {
+      active = false;
+    };
+  }, [family.id, mediaId, onMessage]);
+
+  return (
+    <section className="media-detail-shell">
+      <button className="text-button detail-back" type="button" onClick={onBack}>
+        <ArrowLeft aria-hidden="true" size={17} />
+        返回时间线
+      </button>
+
+      {loading && (
+        <div className="panel media-detail-empty">
+          <p>正在读取媒体详情...</p>
+        </div>
+      )}
+
+      {error && (
+        <div className="panel media-detail-empty">
+          <p className="upload-error">
+            <AlertCircle aria-hidden="true" size={16} />
+            {error}
+          </p>
+        </div>
+      )}
+
+      {media && (
+        <>
+          <div className="media-detail-viewer">
+            {isVideoMedia(media) ? (
+              <video controls src={media.display.url} poster={media.thumbnail.url} preload="metadata" />
+            ) : (
+              <img
+                src={media.display.url}
+                alt={`${media.uploadedBy.displayName || "家人"} 上传的照片`}
+                style={{ aspectRatio: renditionAspectRatio(media.display) }}
+              />
+            )}
+          </div>
+
+          <section className="panel media-detail-meta">
+            <div className="panel-title">
+              {isVideoMedia(media) ? <FileVideo aria-hidden="true" size={19} /> : <FileImage aria-hidden="true" size={19} />}
+              <h2>{isVideoMedia(media) ? "视频详情" : "照片详情"}</h2>
+            </div>
+            <dl>
+              <div>
+                <dt>上传成员</dt>
+                <dd>{media.uploadedBy.displayName || "家人"}</dd>
+              </div>
+              <div>
+                <dt>拍摄时间</dt>
+                <dd>{media.capturedAt ? formatDateTime(media.capturedAt) : "未记录"}</dd>
+              </div>
+              <div>
+                <dt>上传时间</dt>
+                <dd>{formatDateTime(media.uploadedAt)}</dd>
+              </div>
+              <div>
+                <dt>展示规格</dt>
+                <dd>{formatRenditionSize(media.display)}</dd>
+              </div>
+            </dl>
+          </section>
+        </>
+      )}
+    </section>
+  );
+}
+
+function FamilyHome({
+  family,
+  onMessage,
+  onOpenMedia,
+}: {
+  family: Family;
+  onMessage: (value: string) => void;
+  onOpenMedia: (mediaId: number) => void;
 }) {
   const [memberDisplayName, setMemberDisplayName] = useState("");
   const [inviteURL, setInviteURL] = useState("");
@@ -431,7 +591,11 @@ function FamilyHome({
   const [uploadingItemIds, setUploadingItemIds] = useState<Set<number>>(() => new Set());
   const [localFilesByItemId, setLocalFilesByItemId] = useState<Record<number, File>>({});
   const [timelineGroups, setTimelineGroups] = useState<TimelineGroup[]>([]);
+  const [timelineCursor, setTimelineCursor] = useState<string | null>(null);
+  const [timelineMediaTypeFilter, setTimelineMediaTypeFilter] = useState<TimelineMediaTypeFilter>("");
+  const [timelineMonthFilter, setTimelineMonthFilter] = useState("");
   const [timelineLoading, setTimelineLoading] = useState(false);
+  const [timelineLoadingMore, setTimelineLoadingMore] = useState(false);
   const [timelineError, setTimelineError] = useState("");
   const canManageInvites = family.role === "admin";
 
@@ -441,11 +605,17 @@ function FamilyHome({
     setUploadError("");
     setUploadProgress({});
     setLocalFilesByItemId({});
-    setTimelineGroups([]);
-    setTimelineError("");
+    setTimelineMediaTypeFilter("");
+    setTimelineMonthFilter("");
     void loadUploadTasks();
-    void loadTimeline();
   }, [family.id]);
+
+  useEffect(() => {
+    setTimelineGroups([]);
+    setTimelineCursor(null);
+    setTimelineError("");
+    void loadTimeline();
+  }, [family.id, timelineMediaTypeFilter, timelineMonthFilter]);
 
   useEffect(() => {
     if (!canManageInvites) {
@@ -486,16 +656,36 @@ function FamilyHome({
     }
   }
 
-  async function loadTimeline() {
-    setTimelineLoading(true);
+  async function loadTimeline(cursor?: string) {
+    const append = Boolean(cursor);
+    if (append) {
+      setTimelineLoadingMore(true);
+    } else {
+      setTimelineLoading(true);
+    }
     setTimelineError("");
     try {
-      const timeline = await request<TimelineResponse>(`/families/${family.id}/timeline`);
-      setTimelineGroups(timeline.groups ?? []);
+      const query = new URLSearchParams({ limit: String(timelinePageSize) });
+      if (cursor) {
+        query.set("cursor", cursor);
+      }
+      if (timelineMediaTypeFilter) {
+        query.set("mediaType", timelineMediaTypeFilter);
+      }
+      if (timelineMonthFilter) {
+        query.set("month", timelineMonthFilter);
+      }
+      const timeline = await request<TimelineResponse>(`/families/${family.id}/timeline?${query.toString()}`);
+      setTimelineGroups((current) => (append ? mergeTimelineGroups(current, timeline.groups ?? []) : timeline.groups ?? []));
+      setTimelineCursor(timeline.nextCursor ?? null);
     } catch (error) {
       setTimelineError(getErrorMessage(error));
     } finally {
-      setTimelineLoading(false);
+      if (append) {
+        setTimelineLoadingMore(false);
+      } else {
+        setTimelineLoading(false);
+      }
     }
   }
 
@@ -726,8 +916,16 @@ function FamilyHome({
         <TimelinePanel
           groups={timelineGroups}
           loading={timelineLoading}
+          loadingMore={timelineLoadingMore}
           error={timelineError}
+          mediaTypeFilter={timelineMediaTypeFilter}
+          monthFilter={timelineMonthFilter}
+          onMediaTypeFilterChange={setTimelineMediaTypeFilter}
+          onMonthFilterChange={setTimelineMonthFilter}
           onRefresh={loadTimeline}
+          onLoadMore={() => (timelineCursor ? loadTimeline(timelineCursor) : Promise.resolve())}
+          hasNextPage={Boolean(timelineCursor)}
+          onOpenMedia={onOpenMedia}
         />
       </div>
 
@@ -805,13 +1003,29 @@ function FamilyHome({
 function TimelinePanel({
   groups,
   loading,
+  loadingMore,
   error,
+  mediaTypeFilter,
+  monthFilter,
+  onMediaTypeFilterChange,
+  onMonthFilterChange,
   onRefresh,
+  onLoadMore,
+  hasNextPage,
+  onOpenMedia,
 }: {
   groups: TimelineGroup[];
   loading: boolean;
+  loadingMore: boolean;
   error: string;
+  mediaTypeFilter: TimelineMediaTypeFilter;
+  monthFilter: string;
+  onMediaTypeFilterChange: (value: TimelineMediaTypeFilter) => void;
+  onMonthFilterChange: (value: string) => void;
   onRefresh: () => Promise<void>;
+  onLoadMore: () => Promise<void>;
+  hasNextPage: boolean;
+  onOpenMedia: (mediaId: number) => void;
 }) {
   const hasItems = groups.some((group) => group.items.length > 0);
 
@@ -826,6 +1040,22 @@ function TimelinePanel({
           <RefreshCw aria-hidden="true" size={16} />
           {loading ? "刷新中" : "刷新"}
         </button>
+      </div>
+
+      <div className="timeline-filters">
+        <label className="field">
+          <span>媒体类型</span>
+          <select value={mediaTypeFilter} onChange={(event) => onMediaTypeFilterChange(event.target.value as TimelineMediaTypeFilter)}>
+            <option value="">全部</option>
+            <option value="photo">照片</option>
+            <option value="video">视频</option>
+            <option value="live_photo">实况照片</option>
+          </select>
+        </label>
+        <label className="field">
+          <span>月份</span>
+          <input type="month" value={monthFilter} onChange={(event) => onMonthFilterChange(event.target.value)} />
+        </label>
       </div>
 
       {error && (
@@ -853,7 +1083,7 @@ function TimelinePanel({
               </div>
               <div className="timeline-grid">
                 {group.items.map((item) => (
-                  <article className="timeline-card" key={item.id}>
+                  <button className="timeline-card" key={item.id} type="button" onClick={() => onOpenMedia(item.id)}>
                     <img
                       src={item.display.url}
                       alt={`${item.uploadedBy.displayName || "家人"} 上传的照片`}
@@ -864,11 +1094,16 @@ function TimelinePanel({
                       <span>{item.uploadedBy.displayName || "家人"}</span>
                       <time dateTime={item.capturedAt ?? item.uploadedAt}>{formatDateTime(item.capturedAt ?? item.uploadedAt)}</time>
                     </div>
-                  </article>
+                  </button>
                 ))}
               </div>
             </section>
           ))}
+          {hasNextPage && (
+            <button className="secondary-button timeline-more-button" type="button" onClick={() => void onLoadMore()} disabled={loadingMore}>
+              {loadingMore ? "加载中..." : "加载更多"}
+            </button>
+          )}
         </div>
       )}
     </section>
@@ -1114,6 +1349,26 @@ function upsertUploadTaskItem(current: UploadTask[], batch: UploadBatch, item: U
   return current.map((candidate) => (candidate.batch?.id === batch.id ? upsertUploadItem(candidate, batch, item) : candidate));
 }
 
+function mergeTimelineGroups(current: TimelineGroup[], incoming: TimelineGroup[]) {
+  const next = current.map((group) => ({ ...group, items: [...group.items] }));
+  const groupIndexByDate = new Map(next.map((group, index) => [group.date, index]));
+
+  incoming.forEach((group) => {
+    const existingIndex = groupIndexByDate.get(group.date);
+    if (existingIndex === undefined) {
+      groupIndexByDate.set(group.date, next.length);
+      next.push({ ...group, items: [...group.items] });
+      return;
+    }
+
+    const existing = next[existingIndex];
+    const existingItemIds = new Set(existing.items.map((item) => item.id));
+    existing.items.push(...group.items.filter((item) => !existingItemIds.has(item.id)));
+  });
+
+  return next;
+}
+
 function fallbackContentType(filename: string) {
   const lower = filename.toLowerCase();
   if (lower.endsWith(".mp4")) {
@@ -1195,6 +1450,28 @@ function renditionAspectRatio(rendition: TimelineRendition) {
     return `${rendition.width} / ${rendition.height}`;
   }
   return "4 / 3";
+}
+
+function isVideoMedia(media: TimelineMedia) {
+  return media.mediaType === "video" || media.display.contentType.startsWith("video/");
+}
+
+function formatRenditionSize(rendition: TimelineRendition) {
+  if (rendition.width > 0 && rendition.height > 0) {
+    return `${rendition.width} × ${rendition.height}`;
+  }
+  return "未记录";
+}
+
+function parseAppRoute(): AppRoute {
+  const match = window.location.pathname.match(/^\/families\/(\d+)(?:\/(?:timeline|media\/(\d+)))?\/?$/);
+  if (!match) {
+    return { familyId: null, mediaId: null };
+  }
+  return {
+    familyId: Number(match[1]),
+    mediaId: match[2] ? Number(match[2]) : null,
+  };
 }
 
 function readInviteTokenFromURL() {
