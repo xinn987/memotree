@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>家庭时间线 · MemoTree</title>
+  <link rel="stylesheet" href="assets/demo.css" />
+  <style>
+    /* timeline 页专属 */
+    .timeline-hero {
+      padding: var(--space-12) 0 var(--space-6);
+    }
+    .timeline-hero__greeting {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: clamp(28px, 5vw, 44px);
+      letter-spacing: var(--tracking-display);
+      line-height: var(--leading-tight);
+      color: var(--ink);
+      margin: 0 0 var(--space-2);
+    }
+    .timeline-hero__greeting em {
+      font-style: italic;
+      color: var(--caramel);
+      font-weight: 400;
+    }
+    .timeline-hero__sub {
+      color: var(--ink-soft);
+      margin: 0;
+      max-width: 52ch;
+    }
+
+    /* 上传浮标 —— 文档要求"可见但不抢占浏览"，做成右下浮起的圆形 FAB */
+    .fab-upload {
+      position: fixed;
+      right: var(--space-6);
+      bottom: var(--space-8);
+      z-index: var(--z-overlay);
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      height: 52px;
+      padding: 0 var(--space-5);
+      border-radius: var(--radius-pill);
+      background: var(--accent);
+      color: var(--paper-raised);
+      font-weight: 600;
+      font-size: var(--text-sm);
+      box-shadow: var(--shadow-raised);
+      text-decoration: none;
+      transition: transform var(--dur-base) var(--ease-out),
+                  background var(--dur-fast) var(--ease-out);
+    }
+    .fab-upload:hover { background: var(--accent-press); transform: translateY(-2px); }
+    .fab-upload svg { width: 18px; height: 18px; }
+
+    @media (max-width: 720px) {
+      .fab-upload { right: var(--space-4); bottom: var(--space-16); width: 52px; height: 52px; padding: 0; border-radius: var(--radius-pill); justify-content: center; }
+      .fab-upload__label { display: none; }
+      /* 窄屏顶栏简化：只留品牌字 + 头像，家庭信息/切换按钮下移到 hero 区已展示 */
+      .app-bar__family { display: none; }
+      .app-bar .btn--icon { display: none; }
+      .app-bar { padding: 0 var(--space-4); }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============ App bar ============ -->
+  <header class="app-bar">
+    <div class="app-bar__brand">Memo<em>Tree</em></div>
+    <div class="app-bar__family">
+      <span>小满的家</span>
+      <span class="faint">·</span>
+      <span class="faint">4 位家人</span>
+    </div>
+    <div class="app-bar__actions">
+      <button class="btn btn--icon btn--ghost" aria-label="切换家庭" title="切换家庭">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M5 10v10a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V10"/></svg>
+      </button>
+      <div class="avatar" style="width:36px;height:36px;border-radius:50%;background:var(--accent-tint);color:var(--accent-ink);display:grid;place-items:center;font-weight:600;font-size:13px;">妈</div>
+    </div>
+  </header>
+
+  <main class="container--gallery">
+
+    <!-- ============ Hero greeting ============ -->
+    <section class="timeline-hero">
+      <p class="eyebrow-brand">2026 年 · 六月</p>
+      <h1 class="timeline-hero__greeting">小满最近<em>挺好的</em></h1>
+      <p class="timeline-hero__sub">这是这周家里人拍下的瞬间。慢慢看。</p>
+    </section>
+
+    <!-- ============ Toolbar ============ -->
+    <div class="toolbar">
+      <div class="toolbar__group" role="tablist" aria-label="媒体类型">
+        <button class="seg is-active" role="tab" aria-selected="true">全部</button>
+        <button class="seg" role="tab">照片</button>
+        <button class="seg" role="tab">视频</button>
+        <button class="seg" role="tab">实况</button>
+      </div>
+      <div class="toolbar__group" role="tablist" aria-label="月份">
+        <button class="seg is-active" role="tab">六月</button>
+        <button class="seg" role="tab">五月</button>
+        <button class="seg" role="tab">四月</button>
+        <button class="seg" role="tab">更早</button>
+      </div>
+    </div>
+
+    <!-- ============ Month: 六月 ============ -->
+    <section class="month">
+      <div class="month__head">
+        <h2 class="month__title">六月 <em>· 周岁</em></h2>
+        <span class="month__count">23 张照片 · 2 段视频</span>
+      </div>
+      <p class="month__note">小满过生日那天，外婆特意从老家赶来。蛋糕是她亲手做的。</p>
+
+      <div class="story-grid">
+        <!-- 瀑布流：每张照片保留真实宽高比，不裁切 -->
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-cake/600/750" alt="小满的周岁蛋糕" loading="lazy" />
+          <div class="photo__meta">
+            <strong>周岁蛋糕</strong><br />
+            外婆 · 6月15日
+          </div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-smile1/600/600" alt="小满在笑" loading="lazy" />
+          <div class="photo__meta"><strong>爸爸</strong> · 6月15日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-hand/600/800" alt="小满的手" loading="lazy" />
+          <div class="photo__meta"><strong>妈妈</strong> · 6月14日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-walk/600/340" alt="学走路" loading="lazy" />
+          <span class="photo__video-mark">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          </span>
+          <div class="photo__meta"><strong>第一次走路</strong> · 爸爸 · 6月12日 · 0:23</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-bath/600/450" alt="洗澡" loading="lazy" />
+          <div class="photo__meta"><strong>妈妈</strong> · 6月10日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-toy/600/600" alt="玩玩具" loading="lazy" />
+          <div class="photo__meta"><strong>爷爷</strong> · 6月9日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-stand/600/900" alt="扶着沙发站着" loading="lazy" />
+          <div class="photo__meta"><strong>妈妈</strong> · 6月8日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-window/600/800" alt="窗边" loading="lazy" />
+          <div class="photo__meta"><strong>爸爸</strong> · 6月7日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-eat/600/450" alt="吃东西" loading="lazy" />
+          <div class="photo__meta"><strong>外婆</strong> · 6月5日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-nap/600/800" alt="午睡" loading="lazy" />
+          <div class="photo__meta"><strong>妈妈</strong> · 6月3日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-shoe/600/600" alt="小鞋子" loading="lazy" />
+          <div class="photo__meta"><strong>爸爸</strong> · 6月1日</div>
+        </a>
+      </div>
+    </section>
+
+    <!-- ============ Month: 五月 ============ -->
+    <section class="month">
+      <div class="month__head">
+        <h2 class="month__title">五月 <em>· 初夏</em></h2>
+        <span class="month__count">31 张照片 · 1 段视频</span>
+      </div>
+      <p class="month__note">第一次带小满去海边。她怕水，但喜欢沙子。</p>
+
+      <div class="story-grid">
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/beach1/600/340" alt="海边" loading="lazy" />
+          <div class="photo__meta"><strong>海边</strong> · 爸爸 · 5月28日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/sand-play/600/750" alt="玩沙子" loading="lazy" />
+          <div class="photo__meta"><strong>妈妈</strong> · 5月28日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-hat/600/600" alt="戴帽子" loading="lazy" />
+          <div class="photo__meta"><strong>爸爸</strong> · 5月27日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/sunset-baby/600/340" alt="日落" loading="lazy" />
+          <div class="photo__meta"><strong>妈妈</strong> · 5月27日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-laugh2/600/800" alt="大笑" loading="lazy" />
+          <div class="photo__meta"><strong>笑得停不下来</strong> · 妈妈 · 5月20日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/grandpa-hold/600/750" alt="爷爷抱着" loading="lazy" />
+          <div class="photo__meta"><strong>爷爷</strong> · 5月15日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-sleep/600/450" alt="睡着了" loading="lazy" />
+          <div class="photo__meta"><strong>外婆</strong> · 5月10日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-stroll/600/900" alt="散步" loading="lazy" />
+          <div class="photo__meta"><strong>爸爸</strong> · 5月5日</div>
+        </a>
+      </div>
+    </section>
+
+    <!-- ============ Month: 四月 ============ -->
+    <section class="month">
+      <div class="month__head">
+        <h2 class="month__title">四月 <em>· 学爬</em></h2>
+        <span class="month__count">18 张照片</span>
+      </div>
+
+      <div class="story-grid">
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/crawl1/600/900" alt="学爬" loading="lazy" />
+          <div class="photo__meta"><strong>开始会爬了</strong> · 爸爸 · 4月22日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/spring-tree/600/750" alt="春天" loading="lazy" />
+          <div class="photo__meta"><strong>妈妈</strong> · 4月18日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-sock/600/600" alt="小袜子" loading="lazy" />
+          <div class="photo__meta"><strong>妈妈</strong> · 4月15日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-bib/600/450" alt="围嘴" loading="lazy" />
+          <div class="photo__meta"><strong>外婆</strong> · 4月10日</div>
+        </a>
+        <a href="media-detail.html" class="photo">
+          <img src="https://picsum.photos/seed/baby-mirror/600/800" alt="照镜子" loading="lazy" />
+          <div class="photo__meta"><strong>爸爸</strong> · 4月5日</div>
+        </a>
+      </div>
+    </section>
+
+    <!-- ============ Load more ============ -->
+    <div style="display:grid;place-items:center;padding:var(--space-12) 0 var(--space-16);">
+      <button class="btn btn--ghost">再看更早的</button>
+    </div>
+
+  </main>
+
+  <!-- ============ Upload FAB ============ -->
+  <a href="upload.html" class="fab-upload" aria-label="上传新的照片">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    <span class="fab-upload__label">上传新的</span>
+  </a>
+
+  <!-- ============ Demo nav (仅 demo 用) ============ -->
+  <nav class="demo-nav" aria-label="demo 页面切换">
+    <a href="timeline.html" class="is-current" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>
+    <a href="media-detail.html" aria-label="详情"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg><span class="demo-nav__label">详情</span></a>
+    <a href="upload.html" aria-label="上传"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span class="demo-nav__label">上传</span></a>
+    <a href="invite.html" aria-label="邀请"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3-3-3 3"/><path d="M19 8v8"/></svg><span class="demo-nav__label">邀请</span></a>
+    <a href="auth.html" aria-label="登录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span class="demo-nav__label">登录</span></a>
+  </nav>
+
+</body>
+</html>

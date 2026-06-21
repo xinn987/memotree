@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>周岁蛋糕 · 小满的家 · MemoTree</title>
+  <link rel="stylesheet" href="assets/demo.css" />
+  <style>
+    /* 详情页是沉浸式的：整页深暖背景，照片居中聚焦，元信息衬线浮于侧边。
+       刻意不用深纯黑——用暖深棕（oklch h40），保留"温暖纪实"基调。*/
+    body.detail {
+      background: oklch(0.205 0.012 45);
+      color: oklch(0.92 0.008 60);
+      min-height: 100vh;
+    }
+    body.detail .muted { color: oklch(0.72 0.008 60); }
+    body.detail .faint { color: oklch(0.55 0.006 60); }
+
+    .detail-bar {
+      position: sticky;
+      top: 0;
+      z-index: var(--z-sticky);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      height: 60px;
+      padding: 0 var(--space-6);
+      background: oklch(0.205 0.012 45 / 0.7);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid oklch(0.30 0.010 45);
+    }
+    .detail-bar__back {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-2);
+      color: oklch(0.85 0.008 60);
+      text-decoration: none;
+      font-size: var(--text-sm);
+      font-weight: 500;
+    }
+    .detail-bar__back:hover { color: oklch(0.95 0.01 60); }
+    .detail-bar__counter {
+      font-family: var(--font-display);
+      font-size: var(--text-md);
+      color: oklch(0.75 0.008 60);
+      letter-spacing: var(--tracking-tight);
+    }
+    .detail-bar__counter em {
+      color: oklch(0.92 0.01 60);
+      font-style: normal;
+      font-weight: 500;
+    }
+
+    .detail-stage {
+      position: relative;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 320px;
+      gap: var(--space-8);
+      max-width: var(--gallery-width);
+      margin-inline: auto;
+      padding: var(--space-8) var(--space-6) var(--space-12);
+      align-items: start;
+    }
+    @media (max-width: 880px) {
+      .detail-stage { grid-template-columns: minmax(0, 1fr); }
+    }
+
+    /* 上一张 / 下一张 —— 文档明确要求支持 */
+    .nav-arrow {
+      position: absolute;
+      top: 42%;
+      transform: translateY(-50%);
+      z-index: var(--z-overlay);
+      display: grid;
+      place-items: center;
+      width: 48px;
+      height: 48px;
+      border-radius: var(--radius-pill);
+      background: oklch(0.15 0.01 45 / 0.55);
+      backdrop-filter: blur(6px);
+      border: 1px solid oklch(0.35 0.010 45 / 0.6);
+      color: oklch(0.92 0.01 60);
+      cursor: pointer;
+      transition: background var(--dur-fast) var(--ease-out),
+                  transform var(--dur-base) var(--ease-out);
+    }
+    .nav-arrow:hover {
+      background: oklch(0.15 0.01 45 / 0.8);
+      transform: translateY(-50%) scale(1.06);
+    }
+    .nav-arrow--prev { left: var(--space-2); }
+    .nav-arrow--next { right: var(--space-2); }
+    @media (max-width: 720px) {
+      .nav-arrow { width: 40px; height: 40px; }
+    }
+
+    .viewer {
+      position: relative;
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      box-shadow: var(--shadow-photo);
+      background: oklch(0.15 0.01 45);
+    }
+    .viewer img,
+    .viewer video {
+      display: block;
+      width: 100%;
+      max-height: min(78vh, 820px);
+      object-fit: contain;
+      background: oklch(0.15 0.01 45);
+    }
+
+    /* 侧栏元信息 —— 衬线字，像相册背面手写的拍摄记录 */
+    .meta-panel {
+      padding-top: var(--space-4);
+    }
+    .meta-panel__caption {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: var(--text-xl);
+      line-height: var(--leading-snug);
+      color: oklch(0.95 0.012 60);
+      margin: 0 0 var(--space-6);
+    }
+    .meta-panel__by {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3) 0;
+      border-top: 1px solid oklch(0.30 0.010 45);
+      border-bottom: 1px solid oklch(0.30 0.010 45);
+      margin-bottom: var(--space-6);
+    }
+    .meta-panel__by .avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: var(--accent-tint); color: var(--accent-ink);
+      display: grid; place-items: center; font-weight: 600; font-size: 13px;
+      flex: 0 0 auto;
+    }
+    .meta-panel__by strong { display: block; color: oklch(0.92 0.01 60); font-weight: 500; }
+    .meta-panel__by span { font-size: var(--text-xs); color: oklch(0.60 0.006 60); }
+
+    .meta-list { display: grid; gap: var(--space-4); }
+    .meta-list__row {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .meta-list__label {
+      font-size: var(--text-xs);
+      color: oklch(0.55 0.006 60);
+      letter-spacing: 0.04em;
+    }
+    .meta-list__value {
+      font-family: var(--font-display);
+      font-size: var(--text-md);
+      color: oklch(0.90 0.01 60);
+    }
+
+    .meta-actions {
+      display: flex;
+      gap: var(--space-2);
+      margin-top: var(--space-8);
+      flex-wrap: wrap;
+    }
+    .meta-actions .btn {
+      height: 36px;
+      font-size: var(--text-xs);
+      color: oklch(0.80 0.008 60);
+      border-color: oklch(0.32 0.010 45);
+      background: transparent;
+    }
+    .meta-actions .btn:hover {
+      background: oklch(0.26 0.010 45);
+      color: oklch(0.95 0.01 60);
+    }
+
+    /* details 折叠容器 —— PC 默认展开且隐藏 summary，移动端可折叠 */
+    .meta-details { display: block; }
+    .meta-details > summary {
+      list-style: none;
+      cursor: pointer;
+      font-size: var(--text-xs);
+      color: oklch(0.60 0.006 60);
+      letter-spacing: 0.04em;
+      padding: var(--space-3) 0;
+    }
+    .meta-details > summary::-webkit-details-marker { display: none; }
+    .meta-details > summary::after {
+      content: "";
+      display: inline-block;
+      width: 8px; height: 8px;
+      margin-left: var(--space-2);
+      border-right: 1.5px solid currentColor;
+      border-bottom: 1.5px solid currentColor;
+      transform: rotate(45deg);
+      transition: transform var(--dur-fast) var(--ease-out);
+      vertical-align: middle;
+    }
+    .meta-details[open] > summary::after { transform: rotate(-135deg); }
+
+    /* PC（>880px）：details 已在 HTML 标记 open，这里只隐藏 summary，视觉等同修复前 */
+    @media (min-width: 881px) {
+      .meta-details > summary { display: none; }
+    }
+
+    @media (max-width: 880px) {
+      .detail-stage { grid-template-columns: minmax(0, 1fr); }
+      /* 移动端：元信息默认折叠，点 summary 展开 */
+      .meta-details { margin-top: var(--space-4); }
+    }
+  </style>
+</head>
+<body class="detail">
+
+  <header class="detail-bar">
+    <a href="timeline.html" class="detail-bar__back">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+      回到六月
+    </a>
+    <div class="detail-bar__counter">
+      <em>1</em> <span class="faint">/ 23</span>
+    </div>
+    <div style="width:96px"></div>
+  </header>
+
+  <main class="detail-stage">
+
+    <button class="nav-arrow nav-arrow--prev" aria-label="上一张">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+    </button>
+
+    <div class="viewer">
+      <img src="https://picsum.photos/seed/baby-cake/1200/1200" alt="小满的周岁蛋糕" />
+    </div>
+
+    <button class="nav-arrow nav-arrow--next" aria-label="下一张">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+    </button>
+
+    <aside class="meta-panel">
+      <p class="meta-panel__caption">小满的周岁蛋糕。外婆一早起来烤的，奶油是她自己打的。</p>
+
+      <div class="meta-panel__by">
+        <div class="avatar">外</div>
+        <div>
+          <strong>外婆 拍的</strong>
+          <span>6月15日 · 周日 下午 4:20</span>
+        </div>
+      </div>
+
+      <details class="meta-details">
+        <summary>拍摄信息</summary>
+        <dl class="meta-list">
+          <div class="meta-list__row">
+            <dt class="meta-list__label">拍摄时间</dt>
+            <dd class="meta-list__value">6 月 15 日，16:20</dd>
+          </div>
+          <div class="meta-list__row">
+            <dt class="meta-list__label">家庭</dt>
+            <dd class="meta-list__value">小满的家 · 六月</dd>
+          </div>
+          <div class="meta-list__row">
+            <dt class="meta-list__label">画质</dt>
+            <dd class="meta-list__value">2160 × 2160</dd>
+          </div>
+          <div class="meta-list__row">
+            <dt class="meta-list__label">上传于</dt>
+            <dd class="meta-list__value">6 月 15 日，18:02</dd>
+          </div>
+        </dl>
+
+        <div class="meta-actions">
+          <button class="btn">收藏</button>
+          <button class="btn">下载原图</button>
+          <button class="btn">改拍摄时间</button>
+        </div>
+      </details>
+    </aside>
+
+  </main>
+
+  <nav class="demo-nav" aria-label="demo 页面切换">
+    <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>
+    <a href="media-detail.html" class="is-current" aria-label="详情"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg><span class="demo-nav__label">详情</span></a>
+    <a href="upload.html" aria-label="上传"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span class="demo-nav__label">上传</span></a>
+    <a href="invite.html" aria-label="邀请"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3-3-3 3"/><path d="M19 8v8"/></svg><span class="demo-nav__label">邀请</span></a>
+    <a href="auth.html" aria-label="登录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span class="demo-nav__label">登录</span></a>
+  </nav>
+
+  <script>
+    // 按视口宽度同步 details 的 open 状态：宽屏（PC）始终展开，视觉等同折叠改造前；
+    // 窄屏（移动端）默认折叠，用户可点 summary 展开。PC 不受影响。
+    (function () {
+      var d = document.querySelector('.meta-details');
+      if (!d) return;
+      function sync() {
+        d.open = window.matchMedia('(min-width: 881px)').matches;
+      }
+      sync();
+      window.addEventListener('resize', sync);
+    })();
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>邀请家人 · MemoTree</title>
+  <link rel="stylesheet" href="assets/demo.css" />
+  <style>
+    /* 邀请管理页 · 重设计
+       核心动线：生成 → 追踪状态 → 看看家里有谁。一条纵向叙事，不分栏。
+       每个动作单元是一个明确的 section，生成链接的结果在同一位置 inline 展开。*/
+
+    .invite-hero {
+      padding: var(--space-10) 0 var(--space-6);
+    }
+    .invite-hero h1 {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: var(--text-2xl);
+      letter-spacing: var(--tracking-display);
+      margin: var(--space-2) 0 0;
+      color: var(--ink);
+    }
+    .invite-hero p {
+      color: var(--ink-soft);
+      margin: var(--space-2) 0 0;
+      max-width: 50ch;
+    }
+
+    /* 动作单元 —— 每段一个明确目的，用留白分隔，不用卡片包裹 */
+    .action-block {
+      padding: var(--space-8) 0;
+      border-top: 1px solid var(--hairline);
+    }
+    .action-block:first-of-type { border-top: 0; }
+    .action-block__head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: var(--space-4);
+      margin-bottom: var(--space-4);
+    }
+    .action-block__title {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: var(--text-lg);
+      margin: 0;
+      color: var(--ink);
+    }
+    .action-block__title em {
+      font-style: italic;
+      color: var(--caramel);
+      font-weight: 400;
+    }
+    .action-block__hint {
+      font-size: var(--text-sm);
+      color: var(--ink-faint);
+    }
+
+    /* === 动作单元 1：生成邀请 ===
+       输入 + 按钮同行，生成结果就在下方 inline 展开，不跳位置。*/
+    .gen-form {
+      display: flex;
+      gap: var(--space-2);
+      max-width: 540px;
+    }
+    .gen-form .input { flex: 1; }
+    .gen-form .btn { flex: 0 0 auto; }
+    @media (max-width: 540px) {
+      .gen-form { flex-direction: column; }
+      .gen-form .btn { width: 100%; }
+    }
+
+    /* 生成结果 —— 同位置展开，强调"这就是你刚生成的" */
+    .gen-result {
+      display: grid;
+      gap: var(--space-3);
+      margin-top: var(--space-4);
+      padding: var(--space-4);
+      background: var(--accent-tint);
+      border-radius: var(--radius-md);
+      max-width: 540px;
+    }
+    .gen-result__label {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      font-size: var(--text-xs);
+      color: var(--accent-ink);
+      font-weight: 600;
+      letter-spacing: 0.04em;
+    }
+    .gen-result__label svg { width: 14px; height: 14px; }
+    .gen-result__url {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+    .gen-result__url code {
+      flex: 1;
+      min-width: 0;
+      font-family: var(--font-sans);
+      font-size: var(--text-xs);
+      color: var(--accent-ink);
+      background: var(--paper-raised);
+      padding: var(--space-2) var(--space-3);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .gen-result__url .btn {
+      height: 36px;
+      flex: 0 0 auto;
+      background: var(--accent);
+      color: var(--paper-raised);
+      border: 0;
+      font-size: var(--text-xs);
+    }
+    .gen-result__url .btn:hover { background: var(--accent-press); }
+    .gen-result__meta {
+      font-size: var(--text-xs);
+      color: var(--accent-ink);
+      opacity: 0.8;
+    }
+
+    /* === 动作单元 2：发出去的邀请 ===
+       只读状态行，"待使用"的有操作，其余降权重。*/
+    .invite-list { display: grid; gap: var(--space-2); max-width: 640px; }
+    .invite-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      padding: var(--space-3) var(--space-4);
+      border-radius: var(--radius-md);
+      background: var(--paper-raised);
+      border: 1px solid var(--hairline);
+    }
+    /* 已结束的邀请（已加入/已作废/已过期）视觉降权 */
+    .invite-row.is-resolved { opacity: 0.62; }
+    .invite-row__main { min-width: 0; }
+    .invite-row__name {
+      font-weight: 500;
+      color: var(--ink);
+      font-size: var(--text-sm);
+    }
+    .invite-row__meta {
+      font-size: var(--text-xs);
+      color: var(--ink-faint);
+      margin-top: 2px;
+    }
+    .invite-row__actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      flex: 0 0 auto;
+    }
+    .invite-row .btn {
+      height: 30px;
+      font-size: var(--text-xs);
+      padding: 0 var(--space-3);
+    }
+    .invite-row .btn--text { color: var(--accent); }
+    .invite-row .btn--danger {
+      background: transparent;
+      border-color: oklch(0.78 0.060 28);
+      color: var(--state-err);
+    }
+    .invite-row .btn--danger:hover { background: oklch(0.95 0.025 28); }
+    @media (max-width: 540px) {
+      .invite-row { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+      .invite-row__actions { justify-content: flex-end; }
+    }
+
+    /* === 动作单元 3：家里的成员 ===
+       头像横排，紧凑展示"现在家里有谁"。*/
+    .member-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+      gap: var(--space-3);
+      max-width: 640px;
+    }
+    .member-card {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3);
+      border-radius: var(--radius-md);
+      background: var(--paper-raised);
+      border: 1px solid var(--hairline);
+    }
+    .member-card .avatar {
+      width: 40px; height: 40px; border-radius: 50%;
+      display: grid; place-items: center;
+      font-weight: 600; font-size: 14px;
+      flex: 0 0 auto;
+    }
+    .member-card__name {
+      font-weight: 500;
+      color: var(--ink);
+      font-size: var(--text-sm);
+      display: block;
+    }
+    .member-card__role {
+      font-size: var(--text-xs);
+      color: var(--ink-faint);
+    }
+    .member-card__role.is-admin { color: var(--accent); font-weight: 600; }
+
+    .empty-mini {
+      padding: var(--space-6);
+      text-align: center;
+      color: var(--ink-faint);
+      font-size: var(--text-sm);
+      max-width: 640px;
+    }
+  </style>
+</head>
+<body>
+
+  <header class="app-bar">
+    <a href="timeline.html" class="app-bar__brand" style="text-decoration:none">Memo<em>Tree</em></a>
+    <div class="app-bar__family"><span>小满的家</span> <span class="faint">· 管理员</span></div>
+    <div class="app-bar__actions">
+      <a href="timeline.html" class="btn btn--ghost" style="height:36px;font-size:var(--text-xs)">回到时间线</a>
+      <div class="avatar" style="width:36px;height:36px;border-radius:50%;background:var(--accent-tint);color:var(--accent-ink);display:grid;place-items:center;font-weight:600;font-size:13px;">妈</div>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <section class="invite-hero">
+      <span class="eyebrow-brand">家人管理</span>
+      <h1>邀请家人加入</h1>
+      <p>生成一条专属链接发给家人，ta 点开就能注册进来。每条链接 7 天内有效，用一次就作废。</p>
+    </section>
+
+    <!-- 动作单元 1：生成邀请 -->
+    <section class="action-block">
+      <div class="action-block__head">
+        <h2 class="action-block__title">生成 <em>新邀请</em></h2>
+      </div>
+      <p class="action-block__hint" style="margin:0 0 var(--space-4);max-width:50ch">给要邀请的家人起个名字，方便等 ta 加入时认出来是谁。</p>
+
+      <form class="gen-form" onsubmit="return false">
+        <input class="input" type="text" placeholder="比如：外婆、爷爷、舅舅" />
+        <button class="btn btn--primary" type="submit">生成邀请</button>
+      </form>
+
+      <!-- 生成结果：同位置 inline 展开 -->
+      <div class="gen-result">
+        <span class="gen-result__label">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11l-3-3-3 3"/><path d="M19 8v8"/><path d="M2 12h9"/><circle cx="6" cy="6" r="3"/><path d="M9 6h6"/></svg>
+          链接已生成 · 给外婆的 · 7 天内有效
+        </span>
+        <div class="gen-result__url">
+          <code>https://memotree.app/?invite=8Kx2mQ9vLp4rT</code>
+          <button class="btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+            复制
+          </button>
+        </div>
+        <span class="gen-result__meta">把链接发到微信或短信里都行。外婆点开后填个手机号就能进来。</span>
+      </div>
+    </section>
+
+    <!-- 动作单元 2：发出去的邀请 -->
+    <section class="action-block">
+      <div class="action-block__head">
+        <h2 class="action-block__title">发出去的邀请</h2>
+        <span class="action-block__hint">4 条 · 1 条待使用</span>
+      </div>
+
+      <div class="invite-list">
+        <!-- 待使用：有操作 -->
+        <div class="invite-row">
+          <div class="invite-row__main">
+            <span class="invite-row__name">外婆</span>
+            <span class="invite-row__meta">6 月 21 日生成 · 6 月 28 日到期</span>
+          </div>
+          <div class="invite-row__actions">
+            <span class="chip">待使用</span>
+            <button class="btn btn--text">复制</button>
+            <button class="btn btn--danger">作废</button>
+          </div>
+        </div>
+
+        <!-- 已结束：降权，只读 -->
+        <div class="invite-row is-resolved">
+          <div class="invite-row__main">
+            <span class="invite-row__name">爷爷</span>
+            <span class="invite-row__meta">6 月 18 日生成 · 已使用</span>
+          </div>
+          <div class="invite-row__actions">
+            <span class="chip chip--ok">已加入</span>
+          </div>
+        </div>
+
+        <div class="invite-row is-resolved">
+          <div class="invite-row__main">
+            <span class="invite-row__name">舅舅</span>
+            <span class="invite-row__meta">6 月 10 日生成 · 已作废</span>
+          </div>
+          <div class="invite-row__actions">
+            <span class="chip">已作废</span>
+          </div>
+        </div>
+
+        <div class="invite-row is-resolved">
+          <div class="invite-row__main">
+            <span class="invite-row__name">小姨</span>
+            <span class="invite-row__meta">6 月 1 日生成 · 已过期</span>
+          </div>
+          <div class="invite-row__actions">
+            <span class="chip">已过期</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 动作单元 3：家里的成员 -->
+    <section class="action-block">
+      <div class="action-block__head">
+        <h2 class="action-block__title">家里的成员</h2>
+        <span class="action-block__hint">4 人</span>
+      </div>
+
+      <div class="member-grid">
+        <div class="member-card">
+          <div class="avatar" style="background:var(--accent-tint);color:var(--accent-ink)">妈</div>
+          <div>
+            <span class="member-card__name">妈妈</span>
+            <span class="member-card__role is-admin">管理员</span>
+          </div>
+        </div>
+        <div class="member-card">
+          <div class="avatar" style="background:oklch(0.92 0.03 150);color:oklch(0.40 0.10 150)">爸</div>
+          <div>
+            <span class="member-card__name">爸爸</span>
+            <span class="member-card__role">家人</span>
+          </div>
+        </div>
+        <div class="member-card">
+          <div class="avatar" style="background:oklch(0.93 0.04 65);color:oklch(0.45 0.11 65)">爷</div>
+          <div>
+            <span class="member-card__name">爷爷</span>
+            <span class="member-card__role">家人</span>
+          </div>
+        </div>
+        <div class="member-card">
+          <div class="avatar" style="background:oklch(0.93 0.03 230);color:oklch(0.40 0.08 230)">外</div>
+          <div>
+            <span class="member-card__name">外婆</span>
+            <span class="member-card__role">家人</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <div style="height:var(--space-16)"></div>
+
+  </main>
+
+  <nav class="demo-nav" aria-label="demo 页面切换">
+    <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>
+    <a href="media-detail.html" aria-label="详情"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg><span class="demo-nav__label">详情</span></a>
+    <a href="upload.html" aria-label="上传"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span class="demo-nav__label">上传</span></a>
+    <a href="invite.html" class="is-current" aria-label="邀请"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3-3-3 3"/><path d="M19 8v8"/></svg><span class="demo-nav__label">邀请</span></a>
+    <a href="auth.html" aria-label="登录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span class="demo-nav__label">登录</span></a>
+  </nav>
+
+</body>
+</html>

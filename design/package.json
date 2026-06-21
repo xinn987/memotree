@@ -1,0 +1,12 @@
+{
+  "name": "design",
+  "version": "1.0.0",
+  "description": "这是 MemoTree 前端从零重做的**设计探索稿**，用单 HTML 演示 demo 的形式探索页面与交互，**完全不动现有 `web/` 项目代码**。设计方法论遵循 [impeccable](https://impeccable.style/) 的 craft 流程，产品语境来自 [docs/wiki/product-design.md](../docs/wiki/product-design.md)。",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

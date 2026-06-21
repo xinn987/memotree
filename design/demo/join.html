@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>加入小满的家 · MemoTree</title>
+  <link rel="stylesheet" href="assets/demo.css" />
+  <style>
+    /* 邀请加入页 —— 复用 auth 的双栏情绪板结构，但右侧表单是"被邀请加入"的语境。
+       左侧情绪板换成"你即将加入的家庭"信息卡，让被邀请人有归属感。*/
+    .join {
+      display: grid;
+      grid-template-columns: 1.1fr 1fr;
+      min-height: 100vh;
+    }
+    @media (max-width: 880px) {
+      .join { grid-template-columns: 1fr; grid-template-rows: 32vh 1fr; }
+      .join__aside { min-height: 32vh; }
+      .join__brand { left: var(--space-6); bottom: var(--space-5); }
+      .join__brand h1 { font-size: clamp(34px, 9vw, 48px); }
+      .join__brand p { font-size: var(--text-base); }
+      .join__main { padding: var(--space-8) var(--space-6); }
+    }
+
+    /* 左：情绪板 + 家庭信息 */
+    .join__aside {
+      position: relative;
+      overflow: hidden;
+      background: oklch(0.30 0.02 45);
+    }
+    .join__aside img {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      opacity: 0.92;
+    }
+    .join__aside::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(
+        105deg,
+        oklch(0.15 0.02 40 / 0.55) 0%,
+        oklch(0.15 0.02 40 / 0.1) 50%,
+        transparent 100%
+      );
+    }
+    .join__brand {
+      position: absolute;
+      left: var(--space-12);
+      bottom: var(--space-12);
+      z-index: 2;
+      color: var(--paper-raised);
+    }
+    .join__brand h1 {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: clamp(40px, 6vw, 64px);
+      letter-spacing: var(--tracking-display);
+      line-height: 1;
+      margin: 0 0 var(--space-3);
+    }
+    .join__brand h1 em {
+      font-style: italic;
+      color: var(--caramel);
+      font-weight: 400;
+    }
+    .join__brand p {
+      font-family: var(--font-display);
+      font-style: italic;
+      font-size: var(--text-lg);
+      margin: 0 0 var(--space-5);
+      max-width: 24ch;
+      line-height: var(--leading-snug);
+      opacity: 0.92;
+    }
+    .join__family-card {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3) var(--space-4);
+      background: oklch(0.15 0.02 40 / 0.5);
+      backdrop-filter: blur(8px);
+      border-radius: var(--radius-md);
+      width: fit-content;
+    }
+    .join__family-card .avatars {
+      display: flex;
+    }
+    .join__family-card .avatars .avatar {
+      width: 30px; height: 30px; border-radius: 50%;
+      border: 2px solid oklch(0.20 0.02 45);
+      display: grid; place-items: center;
+      font-weight: 600; font-size: 11px;
+      margin-left: -8px;
+    }
+    .join__family-card .avatars .avatar:first-child { margin-left: 0; }
+    .join__family-card span {
+      font-size: var(--text-sm);
+      color: oklch(0.85 0.01 60);
+    }
+
+    /* 右：表单 */
+    .join__main {
+      display: grid;
+      align-content: center;
+      padding: var(--space-12) var(--space-6);
+    }
+    .join__card {
+      width: min(100%, 380px);
+      margin-inline: auto;
+    }
+    .join__heading {
+      margin-bottom: var(--space-8);
+    }
+    .join__heading h2 {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: var(--text-2xl);
+      letter-spacing: var(--tracking-display);
+      margin: var(--space-2) 0 0;
+      color: var(--ink);
+    }
+    .join__heading p {
+      color: var(--ink-soft);
+      margin: var(--space-2) 0 0;
+      font-size: var(--text-sm);
+    }
+    .join__form {
+      display: grid;
+      gap: var(--space-5);
+    }
+    .join__submit { margin-top: var(--space-2); width: 100%; }
+    .join__hint {
+      margin-top: var(--space-6);
+      padding: var(--space-3) var(--space-4);
+      background: var(--paper-recess);
+      border-radius: var(--radius-md);
+      font-size: var(--text-xs);
+      color: var(--ink-soft);
+      line-height: var(--leading-snug);
+    }
+
+    /* 预填好的称呼字段 —— 邀请生成时已指定，被邀请人可改 */
+    .field__prefilled-hint {
+      font-size: var(--text-xs);
+      color: var(--ink-faint);
+      margin-top: var(--space-1);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="join">
+
+    <aside class="join__aside">
+      <img src="https://picsum.photos/seed/family-warm2/1200/1600" alt="" />
+      <div class="join__brand">
+        <h1>Memo<em>Tree</em></h1>
+        <p>你被邀请加入小满的家。</p>
+        <div class="join__family-card">
+          <div class="avatars">
+            <div class="avatar" style="background:var(--accent-tint);color:var(--accent-ink)">妈</div>
+            <div class="avatar" style="background:oklch(0.92 0.03 150 / 0.9);color:oklch(0.40 0.10 150)">爸</div>
+            <div class="avatar" style="background:oklch(0.93 0.04 65 / 0.9);color:oklch(0.45 0.11 65)">爷</div>
+            <div class="avatar" style="background:oklch(0.93 0.03 230 / 0.9);color:oklch(0.40 0.08 230)">外</div>
+          </div>
+          <span>小满的家 · 4 位家人</span>
+        </div>
+      </div>
+    </aside>
+
+    <main class="join__main">
+      <div class="join__card">
+
+        <div class="join__heading">
+          <span class="eyebrow-brand">欢迎加入</span>
+          <h2>填一下你的信息</h2>
+          <p>填完就能看到家里人的照片了。</p>
+        </div>
+
+        <form class="join__form" onsubmit="return false">
+          <label class="field">
+            <span class="field__label">家人怎么称呼你</span>
+            <input class="input" type="text" value="外婆" placeholder="比如：外婆、爷爷、舅舅" />
+            <span class="field__prefilled-hint">妈妈邀请你时填了这个称呼，你可以改。</span>
+          </label>
+
+          <label class="field">
+            <span class="field__label">手机号</span>
+            <input class="input" type="tel" placeholder="用来登录" autocomplete="tel" />
+          </label>
+
+          <label class="field">
+            <span class="field__label">设一个密码</span>
+            <input class="input" type="password" placeholder="至少 6 位" autocomplete="new-password" />
+          </label>
+
+          <button class="btn btn--primary join__submit" type="submit">加入小满的家</button>
+        </form>
+
+        <p class="join__hint">
+          加入后你就能看到时间线里所有的照片，也能上传新的。如果之后想退出，随时跟家里的管理员说一声。
+        </p>
+
+      </div>
+    </main>
+
+  </div>
+
+  <nav class="demo-nav" aria-label="demo 页面切换">
+    <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>
+    <a href="media-detail.html" aria-label="详情"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg><span class="demo-nav__label">详情</span></a>
+    <a href="upload.html" aria-label="上传"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span class="demo-nav__label">上传</span></a>
+    <a href="invite.html" aria-label="邀请"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3-3-3 3"/><path d="M19 8v8"/></svg><span class="demo-nav__label">邀请</span></a>
+  </nav>
+
+</body>
+</html>

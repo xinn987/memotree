@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>上传 · MemoTree</title>
+  <link rel="stylesheet" href="assets/demo.css" />
+  <style>
+    /* 上传页：次要流程，但要把"任务/失败/停止"这种后台黑话软化成家庭语气。
+       整体仍是 product UI 的克制——状态用 chip + 进度条，不做花哨动效。*/
+
+    .upload-hero {
+      padding: var(--space-10) 0 var(--space-6);
+    }
+    .upload-hero h1 {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: var(--text-2xl);
+      letter-spacing: var(--tracking-display);
+      margin: var(--space-2) 0 0;
+      color: var(--ink);
+    }
+    .upload-hero p {
+      color: var(--ink-soft);
+      margin: var(--space-2) 0 0;
+      max-width: 50ch;
+    }
+
+    /* 拖放区 —— 文档说 MVP 不做拖拽上传，但点击选择的大块热区仍要有 */
+    .dropzone {
+      display: grid;
+      place-items: center;
+      gap: var(--space-3);
+      padding: var(--space-12) var(--space-6);
+      border: 1.5px dashed oklch(0.78 0.03 45);
+      border-radius: var(--radius-lg);
+      background: var(--paper-raised);
+      text-align: center;
+      transition: border-color var(--dur-base) var(--ease-out),
+                  background var(--dur-base) var(--ease-out);
+      cursor: pointer;
+    }
+    .dropzone:hover {
+      border-color: var(--accent);
+      background: var(--accent-tint);
+    }
+    .dropzone__icon {
+      display: grid;
+      place-items: center;
+      width: 56px; height: 56px;
+      border-radius: var(--radius-pill);
+      background: var(--accent-tint);
+      color: var(--accent);
+      margin-bottom: var(--space-2);
+    }
+    .dropzone__title {
+      font-family: var(--font-display);
+      font-size: var(--text-lg);
+      color: var(--ink);
+      margin: 0;
+    }
+    .dropzone__hint {
+      font-size: var(--text-sm);
+      color: var(--ink-soft);
+      margin: 0;
+      max-width: 38ch;
+    }
+    .dropzone__limit {
+      display: flex;
+      gap: var(--space-3);
+      justify-content: center;
+      margin-top: var(--space-3);
+      font-size: var(--text-xs);
+      color: var(--ink-faint);
+    }
+
+    /* 当前任务区 */
+    .task {
+      margin-top: var(--space-8);
+      padding: var(--space-6);
+      background: var(--paper-raised);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-lg);
+    }
+    .task__head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      margin-bottom: var(--space-5);
+    }
+    .task__title {
+      font-family: var(--font-display);
+      font-size: var(--text-lg);
+      color: var(--ink);
+      margin: 0;
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+    }
+    .task__stats {
+      display: flex;
+      gap: var(--space-6);
+    }
+    .task__stat {
+      display: grid;
+      gap: 2px;
+    }
+    .task__stat-num {
+      font-family: var(--font-display);
+      font-size: var(--text-lg);
+      color: var(--ink);
+      line-height: 1;
+    }
+    .task__stat-label {
+      font-size: var(--text-xs);
+      color: var(--ink-faint);
+    }
+
+    /* 文件行 */
+    .file-list { display: grid; gap: var(--space-3); }
+    .file-row {
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-3);
+      border-radius: var(--radius-md);
+      background: var(--paper);
+    }
+    .file-row__thumb {
+      width: 48px; height: 48px;
+      border-radius: var(--radius-sm);
+      object-fit: cover;
+      background: var(--paper-recess);
+    }
+    .file-row__main { min-width: 0; display: grid; gap: var(--space-2); }
+    .file-row__name {
+      display: flex;
+      align-items: baseline;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+    .file-row__name strong {
+      font-weight: 500;
+      color: var(--ink);
+      font-size: var(--text-sm);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .file-row__name span {
+      font-size: var(--text-xs);
+      color: var(--ink-faint);
+      flex: 0 0 auto;
+    }
+    .progress {
+      height: 4px;
+      border-radius: var(--radius-pill);
+      background: var(--paper-recess);
+      overflow: hidden;
+    }
+    .progress__bar {
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+      transition: width var(--dur-base) var(--ease-out);
+    }
+    .progress__bar.is-processing { background: var(--caramel); }
+    .progress__bar.is-failed { background: var(--state-err); }
+    .progress__bar.is-done { background: var(--state-ok); }
+    .file-row__status {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+    }
+
+    /* 底部操作 */
+    .task__foot {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: var(--space-4);
+      margin-top: var(--space-5);
+      padding-top: var(--space-5);
+      border-top: 1px solid var(--hairline);
+    }
+
+    /* 最近任务 */
+    .recent { margin-top: var(--space-10); }
+    .recent__head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: var(--space-4);
+    }
+    .recent__head h2 {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: var(--text-lg);
+      margin: 0;
+      color: var(--ink);
+    }
+    .recent__head span { font-size: var(--text-sm); color: var(--ink-faint); }
+    .recent__list { display: grid; gap: var(--space-2); }
+    .recent__row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+      padding: var(--space-3) var(--space-4);
+      border-radius: var(--radius-md);
+      background: var(--paper-raised);
+      border: 1px solid var(--hairline);
+    }
+    .recent__row strong {
+      font-weight: 500;
+      color: var(--ink);
+      font-size: var(--text-sm);
+    }
+    .recent__row span { font-size: var(--text-xs); color: var(--ink-faint); }
+
+    @media (max-width: 720px) {
+      /* 窄屏顶栏简化 */
+      .app-bar__family { display: none; }
+      .app-bar { padding: 0 var(--space-4); }
+      /* 任务头在窄屏换行，统计占满一行 */
+      .task__head { flex-wrap: wrap; }
+      .task__stats { width: 100%; justify-content: space-between; }
+      /* 文件行：缩略图 + 进度占主行，状态 chip 折到下一行 */
+      .file-row { grid-template-columns: 40px minmax(0, 1fr); }
+      .file-row__thumb { width: 40px; height: 40px; }
+      .file-row__status { grid-column: 1 / -1; justify-content: flex-start; }
+      /* 最近任务行：窄屏纵向堆叠，避免日期+chip 长串换行错乱 */
+      .recent__row { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+      /* 任务统计窄屏更紧凑，数字与标签同行 */
+      .task__stat { display: flex; align-items: baseline; gap: var(--space-1); }
+      /* 任务底部：窄屏纵向堆叠，提示文字与按钮分行 */
+      .task__foot { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+      .task__foot > div { justify-content: stretch; }
+      .task__foot .btn { flex: 1; }
+    }
+  </style>
+  </style>
+</head>
+<body>
+
+  <header class="app-bar">
+    <a href="timeline.html" class="app-bar__brand" style="text-decoration:none">Memo<em>Tree</em></a>
+    <div class="app-bar__family"><span>小满的家</span></div>
+    <div class="app-bar__actions">
+      <div class="avatar" style="width:36px;height:36px;border-radius:50%;background:var(--accent-tint);color:var(--accent-ink);display:grid;place-items:center;font-weight:600;font-size:13px;">妈</div>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <section class="upload-hero">
+      <span class="eyebrow-brand">上传</span>
+      <h1>给家里加几张新的</h1>
+      <p>挑你想让家人看到的那些。传完会自动整理好，明天就出现在时间线上。</p>
+    </section>
+
+    <!-- 拖放 / 选择区 -->
+    <label class="dropzone">
+      <input type="file" multiple accept="image/*,video/*" hidden />
+      <span class="dropzone__icon">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </span>
+      <p class="dropzone__title">选择照片或视频</p>
+      <p class="dropzone__hint">可以一次选很多张。手机上也能直接从相册里挑。</p>
+      <div class="dropzone__limit">
+        <span>一次最多 100 张</span>
+        <span>照片 ≤ 50 MB</span>
+        <span>视频 ≤ 1 GB</span>
+      </div>
+    </label>
+
+    <!-- 当前任务 -->
+    <section class="task">
+      <div class="task__head">
+        <h2 class="task__title">
+          这批正在传
+          <span class="chip chip--accent">整理中</span>
+        </h2>
+        <div class="task__stats">
+          <div class="task__stat"><span class="task__stat-num">5 / 8</span><span class="task__stat-label">已传完</span></div>
+          <div class="task__stat"><span class="task__stat-num">1</span><span class="task__stat-label">没传成</span></div>
+        </div>
+      </div>
+
+      <div class="file-list">
+        <!-- 已完成 -->
+        <div class="file-row">
+          <img class="file-row__thumb" src="https://picsum.photos/seed/u1/96/96" alt="" />
+          <div class="file-row__main">
+            <div class="file-row__name"><strong>IMG_4521.HEIC</strong><span>3.2 MB</span></div>
+            <div class="progress"><span class="progress__bar is-done" style="width:100%"></span></div>
+          </div>
+          <div class="file-row__status"><span class="chip chip--ok">已整理好</span></div>
+        </div>
+
+        <!-- 处理中 -->
+        <div class="file-row">
+          <img class="file-row__thumb" src="https://picsum.photos/seed/u2/96/96" alt="" />
+          <div class="file-row__main">
+            <div class="file-row__name"><strong>IMG_4522.HEIC</strong><span>4.1 MB</span></div>
+            <div class="progress"><span class="progress__bar is-processing" style="width:100%"></span></div>
+          </div>
+          <div class="file-row__status"><span class="chip chip--warn">正在整理</span></div>
+        </div>
+
+        <!-- 上传中 -->
+        <div class="file-row">
+          <img class="file-row__thumb" src="https://picsum.photos/seed/u3/96/96" alt="" />
+          <div class="file-row__main">
+            <div class="file-row__name"><strong>birthday.mp4</strong><span>128 MB</span></div>
+            <div class="progress"><span class="progress__bar" style="width:64%"></span></div>
+          </div>
+          <div class="file-row__status"><span class="chip">传了 64%</span></div>
+        </div>
+
+        <!-- 等待 -->
+        <div class="file-row">
+          <img class="file-row__thumb" src="https://picsum.photos/seed/u4/96/96" alt="" />
+          <div class="file-row__main">
+            <div class="file-row__name"><strong>IMG_4524.HEIC</strong><span>2.8 MB</span></div>
+            <div class="progress"><span class="progress__bar" style="width:0%"></span></div>
+          </div>
+          <div class="file-row__status"><span class="chip">排队中</span></div>
+        </div>
+
+        <!-- 失败 -->
+        <div class="file-row">
+          <img class="file-row__thumb" src="https://picsum.photos/seed/u5/96/96" alt="" />
+          <div class="file-row__main">
+            <div class="file-row__name"><strong>IMG_4519.HEIC</strong><span>5.5 MB</span></div>
+            <div class="progress"><span class="progress__bar is-failed" style="width:100%"></span></div>
+          </div>
+          <div class="file-row__status">
+            <span class="chip chip--err">没传成</span>
+            <button class="btn btn--text" style="height:28px">再试一次</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="task__foot">
+        <span class="faint" style="font-size:var(--text-xs)">还没传完的，关掉页面可能会中断。整理这步后台会继续。</span>
+        <div style="display:flex;gap:var(--space-2)">
+          <button class="btn btn--ghost">先不传了</button>
+          <button class="btn btn--primary">继续上传</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 最近任务 -->
+    <section class="recent">
+      <div class="recent__head">
+        <h2>最近传过的</h2>
+        <span>3 批</span>
+      </div>
+      <div class="recent__list">
+        <div class="recent__row">
+          <div><strong>海边那批</strong> <span>· 28 张</span></div>
+          <span>5 月 28 日 · <span class="chip chip--ok" style="margin-left:6px">都好了</span></span>
+        </div>
+        <div class="recent__row">
+          <div><strong>生日准备</strong> <span>· 12 张 · 1 段视频</span></div>
+          <span>6 月 14 日 · <span class="chip chip--ok" style="margin-left:6px">都好了</span></span>
+        </div>
+        <div class="recent__row">
+          <div><strong>四月日常</strong> <span>· 9 张</span></div>
+          <span>4 月 20 日 · <span class="chip chip--warn" style="margin-left:6px">有 1 张没成</span></span>
+        </div>
+      </div>
+    </section>
+
+    <div style="height:var(--space-16)"></div>
+
+  </main>
+
+  <nav class="demo-nav" aria-label="demo 页面切换">
+    <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>
+    <a href="media-detail.html" aria-label="详情"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg><span class="demo-nav__label">详情</span></a>
+    <a href="upload.html" class="is-current" aria-label="上传"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span class="demo-nav__label">上传</span></a>
+    <a href="invite.html" aria-label="邀请"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3-3-3 3"/><path d="M19 8v8"/></svg><span class="demo-nav__label">邀请</span></a>
+    <a href="auth.html" aria-label="登录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span class="demo-nav__label">登录</span></a>
+  </nav>
+
+</body>
+</html>
