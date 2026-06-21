@@ -351,7 +351,12 @@ h2 {
   outline-offset: 3px;
 }
 
-.timeline-card img {
+.timeline-card-preview {
+  position: relative;
+  display: block;
+}
+
+.timeline-card-preview img {
   display: block;
   width: 100%;
   min-height: 130px;
@@ -359,6 +364,20 @@ h2 {
   object-fit: cover;
   border-radius: 8px;
   background: #e8edf4;
+}
+
+.timeline-video-badge {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: #ffffff;
+  border-radius: 999px;
+  background: rgb(7 12 24 / 72%);
+  box-shadow: 0 4px 14px rgb(7 12 24 / 18%);
 }
 
 .timeline-card-meta {

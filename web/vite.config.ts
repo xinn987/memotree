@@ -6,10 +6,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/auth": "http://localhost:8080",
-      "/families": "http://localhost:8080",
-      "/invites": "http://localhost:8080",
-      "/healthz": "http://localhost:8080",
+      // 开发期只代理 /api，避免 /families/:id/timeline 这类前端历史路由被后端 API 抢走。
+      "/api": {
+        target: "http://localhost:8080",
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
     },
   },
 });

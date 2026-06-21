@@ -163,7 +163,7 @@ server/logs/init-storage.log
 node tools/run-web.mjs
 ```
 
-前端默认地址是 `http://localhost:5173`，Vite 会把 `/auth`、`/families`、`/invites` 代理到本地 API。
+前端默认地址是 `http://localhost:5173`，Vite 只会把 `/api/*` 代理到本地 API，并在代理前去掉 `/api` 前缀；`/families/{familyId}/timeline` 这类路径保留给前端历史路由。
 
 如果 `5173` 被旧 Vite 进程占用，可以先看脚本打印的 PID；确认可关闭后运行：
 
@@ -209,7 +209,7 @@ Family Access 当前已经可以在本地完整测试：
 
 - 照片缩略图/展示图、视频缩略图/展示视频流程已实现；`node tools/run-worker.mjs` 会自动准备项目根目录 npm 托管的 FFmpeg/FFprobe，并注入 `FFMPEG_PATH`、`FFPROBE_PATH`。如需使用自定义二进制，也可以显式设置这两个环境变量。
 - 时间线后端/API 已支持 `limit` + `cursor` 稳定分页；前端时间线底部会在存在下一页时显示“加载更多”。
-- 移动端上传、时间线浏览和视频详情仍需要执行一次浏览器 smoke test。
+- 移动端上传、时间线浏览和视频详情已经完成浏览器 smoke test 覆盖。
 - 原文件下载入口和下载 API 明确后置，前端不会拿到原文件 object key 或永久公开 URL。
 
 ## Worker

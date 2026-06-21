@@ -10,6 +10,7 @@ import {
   KeyRound,
   Link as LinkIcon,
   LogOut,
+  PlayCircle,
   Plus,
   RefreshCw,
   RotateCw,
@@ -142,6 +143,8 @@ type AppRoute = {
 // 上传处理由后端 Worker 异步完成，前端用短轮询把处理结果回填到任务视图。
 const uploadTaskPollIntervalMs = 2000;
 const timelinePageSize = 30;
+// API 请求统一走可配置前缀，开发期默认由 Vite /api 代理转发到 Go 服务。
+const apiBasePath = import.meta.env.VITE_API_BASE_PATH ?? "/api";
 
 type SessionResponse =
   | { authenticated: false }
@@ -1084,12 +1087,19 @@ function TimelinePanel({
               <div className="timeline-grid">
                 {group.items.map((item) => (
                   <button className="timeline-card" key={item.id} type="button" onClick={() => onOpenMedia(item.id)}>
-                    <img
-                      src={item.display.url}
-                      alt={`${item.uploadedBy.displayName || "家人"} 上传的照片`}
-                      loading="lazy"
-                      style={{ aspectRatio: renditionAspectRatio(item.display) }}
-                    />
+                    <span className="timeline-card-preview">
+                      <img
+                        src={item.thumbnail.url}
+                        alt={timelinePreviewAlt(item)}
+                        loading="lazy"
+                        style={{ aspectRatio: renditionAspectRatio(item.thumbnail) }}
+                      />
+                      {isVideoMedia(item) && (
+                        <span className="timeline-video-badge" aria-label="视频">
+                          <PlayCircle aria-hidden="true" size={22} />
+                        </span>
+                      )}
+                    </span>
                     <div className="timeline-card-meta">
                       <span>{item.uploadedBy.displayName || "家人"}</span>
                       <time dateTime={item.capturedAt ?? item.uploadedAt}>{formatDateTime(item.capturedAt ?? item.uploadedAt)}</time>
@@ -1269,7 +1279,7 @@ function UploadPanel({
 }
 
 async function request<T = unknown>(path: string, init: RequestInit = {}): Promise<T> {
-  const response = await fetch(path, {
+  const response = await fetch(apiURL(path), {
     ...init,
     credentials: "same-origin",
     headers: {
@@ -1283,6 +1293,15 @@ async function request<T = unknown>(path: string, init: RequestInit = {}): Promi
     throw new Error(data.error ?? "请求失败");
   }
   return data;
+}
+
+function apiURL(path: string) {
+  if (/^https?:\/\//.test(path)) {
+    return path;
+  }
+  const base = apiBasePath.replace(/\/$/, "");
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `${base}${normalizedPath}`;
 }
 
 function putFile(item: UploadItem, file: File, onProgress: (progress: number) => void): Promise<void> {
@@ -1454,6 +1473,11 @@ function renditionAspectRatio(rendition: TimelineRendition) {
 
 function isVideoMedia(media: TimelineMedia) {
   return media.mediaType === "video" || media.display.contentType.startsWith("video/");
+}
+
+function timelinePreviewAlt(media: TimelineMedia) {
+  const memberName = media.uploadedBy.displayName || "家人";
+  return `${memberName} 上传的${isVideoMedia(media) ? "视频" : "照片"}`;
 }
 
 function formatRenditionSize(rendition: TimelineRendition) {
