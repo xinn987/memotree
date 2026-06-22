@@ -137,6 +137,7 @@ func (s *MemoryStore) DeleteSession(_ context.Context, tokenHash string) error {
 func (s *MemoryStore) CreateFamily(_ context.Context, displayName string, timezone string, creatorID int64, creatorDisplayName string) (FamilySummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := time.Now()
 	s.nextFamilyID++
 	created := family{ID: s.nextFamilyID, DisplayName: displayName, Timezone: timezone, CreatedBy: creatorID}
 	s.families[created.ID] = created
@@ -149,6 +150,7 @@ func (s *MemoryStore) CreateFamily(_ context.Context, displayName string, timezo
 		DisplayName: creatorDisplayName,
 		Role:        MemberRoleAdmin,
 		Status:      MemberStatusActive,
+		JoinedAt:    now,
 	}
 	return FamilySummary{ID: created.ID, DisplayName: created.DisplayName, Timezone: created.Timezone, Role: MemberRoleAdmin, MemberDisplayName: creatorDisplayName}, nil
 }
@@ -193,6 +195,63 @@ func (s *MemoryStore) IsActiveAdmin(_ context.Context, familyID int64, userID in
 		}
 	}
 	return false, nil
+}
+
+func (s *MemoryStore) ListFamilyMembers(_ context.Context, familyID int64) ([]FamilyMember, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := []FamilyMember{}
+	for _, member := range s.members {
+		if member.FamilyID == familyID {
+			result = append(result, member)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Status != result[j].Status {
+			return result[i].Status == MemberStatusActive
+		}
+		return result[i].ID < result[j].ID
+	})
+	return result, nil
+}
+
+func (s *MemoryStore) UpdateFamilyMemberDisplayName(_ context.Context, familyID int64, memberID int64, displayName string) (FamilyMember, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	member, ok := s.members[memberID]
+	if !ok || member.FamilyID != familyID {
+		return FamilyMember{}, ErrNotFound
+	}
+	member.DisplayName = displayName
+	s.members[member.ID] = member
+	return member, nil
+}
+
+func (s *MemoryStore) RemoveFamilyMember(_ context.Context, familyID int64, memberID int64, actorUserID int64, now time.Time) (FamilyMember, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	member, ok := s.members[memberID]
+	if !ok || member.FamilyID != familyID {
+		return FamilyMember{}, ErrNotFound
+	}
+	if member.UserID == actorUserID {
+		// 成员管理里的“移除”只用于移除他人；自己离开家庭需要单独的产品动作。
+		return FamilyMember{}, ErrSelfRemoval
+	}
+	if member.Status == MemberStatusRemoved {
+		return member, nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if member.Role == MemberRoleAdmin && s.activeAdminCount(familyID) <= 1 {
+		// 最后一个 active admin 不能被移除，否则家庭空间会失去可管理者。
+		return FamilyMember{}, ErrLastAdmin
+	}
+	member.Status = MemberStatusRemoved
+	member.RemovedAt = now
+	s.members[member.ID] = member
+	return member, nil
 }
 
 // ListTimelineMedia 返回家庭时间线中已经可展示的媒体。
@@ -269,6 +328,22 @@ func (s *MemoryStore) FindMediaDetail(_ context.Context, input FindMediaDetailIn
 		Thumbnail:             thumbnail,
 		Display:               display,
 	}, true, nil
+}
+
+func (s *MemoryStore) SoftDeleteMedia(_ context.Context, familyID int64, mediaID int64, now time.Time) (MediaAsset, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	asset, ok := s.mediaAssets[mediaID]
+	if !ok || asset.FamilyID != familyID || asset.Status != MediaStatusActive {
+		return MediaAsset{}, ErrNotFound
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	asset.Status = MediaStatusDeleted
+	asset.DeletedAt = now
+	s.mediaAssets[asset.ID] = asset
+	return asset, nil
 }
 
 // CreateInvite 创建待使用邀请。
@@ -349,6 +424,7 @@ func (s *MemoryStore) JoinInvite(_ context.Context, tokenHash string, userID int
 		if invite.MemberDisplayName != "" {
 			member.DisplayName = invite.MemberDisplayName
 		}
+		member.RemovedAt = time.Time{}
 		s.members[id] = member
 		s.markInviteUsed(tokenHash, invite, userID, now)
 		return member, nil
@@ -366,6 +442,7 @@ func (s *MemoryStore) JoinInvite(_ context.Context, tokenHash string, userID int
 		DisplayName: displayName,
 		Role:        MemberRoleMember,
 		Status:      MemberStatusActive,
+		JoinedAt:    now,
 	}
 	s.members[member.ID] = member
 	s.markInviteUsed(tokenHash, invite, userID, now)
@@ -620,6 +697,40 @@ func (s *MemoryStore) RetryUploadItem(_ context.Context, input UpdateUploadItemS
 	return batch, item, nil
 }
 
+func (s *MemoryStore) RetryProcessingItem(_ context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	batch, ok := s.uploadBatches[input.BatchID]
+	if !ok || batch.FamilyID != input.FamilyID {
+		return UploadBatch{}, UploadItem{}, ErrNotFound
+	}
+	item, ok := s.uploadItems[input.ItemID]
+	if !ok || item.UploadBatchID != batch.ID || item.MediaAssetID == 0 || item.Status != UploadItemStatusProcessingFailed {
+		return UploadBatch{}, UploadItem{}, ErrInvalidUpload
+	}
+	asset, ok := s.mediaAssets[item.MediaAssetID]
+	if !ok || asset.FamilyID != input.FamilyID || asset.Status != MediaStatusActive {
+		return UploadBatch{}, UploadItem{}, ErrNotFound
+	}
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	// 原文件已经入库，重试只重新排队处理任务，不生成新的 upload item。
+	item.Status = UploadItemStatusProcessing
+	item.ErrorMessage = ""
+	item.UpdatedAt = now
+	item.CompletedAt = time.Time{}
+	s.uploadItems[item.ID] = item
+
+	asset.RenditionStatus = RenditionStatusPending
+	s.mediaAssets[asset.ID] = asset
+
+	batch = s.recalculateUploadBatch(batch)
+	s.uploadBatches[batch.ID] = batch
+	return batch, item, nil
+}
+
 // CreateUploadBatch 创建上传任务和待上传文件条目。
 // 同一用户同一家庭只允许一个 active batch，和 MySQL 的唯一键语义保持一致。
 func (s *MemoryStore) CreateUploadBatch(_ context.Context, input CreateUploadBatchInput) (UploadBatch, []UploadItem, error) {
@@ -702,6 +813,16 @@ func (s *MemoryStore) memberDisplayName(familyID int64, userID int64) string {
 		return user.DisplayName
 	}
 	return ""
+}
+
+func (s *MemoryStore) activeAdminCount(familyID int64) int {
+	count := 0
+	for _, member := range s.members {
+		if member.FamilyID == familyID && member.Status == MemberStatusActive && member.Role == MemberRoleAdmin {
+			count++
+		}
+	}
+	return count
 }
 
 func timelineSortTime(asset MediaAsset) time.Time {

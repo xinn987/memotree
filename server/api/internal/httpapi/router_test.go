@@ -116,6 +116,52 @@ func TestAuthFamilyInviteFlow(t *testing.T) {
 	deleteJSON(t, router, rootCookie, http.StatusConflict, "/families/"+itoa(familyID)+"/invites/"+itoa(activeInviteID))
 }
 
+func TestFamilyMemberManagementRoutes(t *testing.T) {
+	router := NewRouter(config.Config{AppEnv: "test", SessionCookieName: "memotree_test_session"})
+	adminCookie, familyID := createSignedInFamily(t, router, "member-admin")
+	memberCookie := joinFamilyWithInvite(t, router, adminCookie, familyID, "member-grandma")
+
+	_, membersResponse := getJSON(t, router, adminCookie, http.StatusOK, "/families/"+itoa(familyID)+"/members")
+	members := membersResponse["members"].([]any)
+	if len(members) != 2 {
+		t.Fatalf("expected admin to list creator and joined member, got %#v", membersResponse)
+	}
+	var joinedMember map[string]any
+	var adminMember map[string]any
+	for _, raw := range members {
+		member := raw.(map[string]any)
+		if member["role"] == store.MemberRoleAdmin {
+			adminMember = member
+		} else {
+			joinedMember = member
+		}
+	}
+	if joinedMember == nil || adminMember == nil {
+		t.Fatalf("expected both admin and member rows, got %#v", membersResponse)
+	}
+	memberID := int(joinedMember["id"].(float64))
+	adminMemberID := int(adminMember["id"].(float64))
+
+	_, renamed := patchJSON(t, router, adminCookie, http.StatusOK, "/families/"+itoa(familyID)+"/members/"+itoa(memberID), map[string]string{
+		"displayName": "grandma nickname",
+	})
+	if renamed["member"].(map[string]any)["displayName"] != "grandma nickname" {
+		t.Fatalf("expected renamed member, got %#v", renamed)
+	}
+	getJSON(t, router, memberCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/members")
+	_, selfRemoval := deleteJSON(t, router, adminCookie, http.StatusConflict, "/families/"+itoa(familyID)+"/members/"+itoa(adminMemberID))
+	if selfRemoval["error"] != "不能移除自己" {
+		t.Fatalf("expected self removal protection, got %#v", selfRemoval)
+	}
+
+	_, removed := deleteJSON(t, router, adminCookie, http.StatusOK, "/families/"+itoa(familyID)+"/members/"+itoa(memberID))
+	if removed["member"].(map[string]any)["status"] != store.MemberStatusRemoved {
+		t.Fatalf("expected removed member response, got %#v", removed)
+	}
+	getJSON(t, router, memberCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/uploads/active")
+	getJSON(t, router, memberCookie, http.StatusForbidden, "/families/"+itoa(familyID)+"/members")
+}
+
 func TestRouterCanUseInjectedStore(t *testing.T) {
 	sharedStore := store.NewMemoryStore()
 	cfg := config.Config{AppEnv: "test", SessionCookieName: "memotree_test_session"}
@@ -748,6 +794,30 @@ func TestMediaDetailEnforcesVisibility(t *testing.T) {
 	getJSON(t, router, rootCookie, http.StatusNotFound, "/families/"+itoa(int(familyID))+"/media/7")
 }
 
+func TestDeleteMediaRequiresAdminAndHidesDetail(t *testing.T) {
+	appStore := &softDeleteMediaStore{MemoryStore: store.NewMemoryStore()}
+	router := newUploadTestRouter(appStore, fakeStorageService{})
+	adminCookie, adminUser := postJSON(t, router, nil, http.StatusCreated, "/auth/register", map[string]string{
+		"loginName":   "delete-admin",
+		"password":    "secret123",
+		"displayName": "admin",
+	})
+	_, family := postJSON(t, router, adminCookie, http.StatusCreated, "/families", map[string]string{
+		"displayName": "family",
+	})
+	familyID := int64(family["id"].(float64))
+	adminUserID := int64(adminUser["id"].(float64))
+	appStore.detail = store.MediaDetail(timelineRow(7, familyID, adminUserID, time.Date(2026, 6, 13, 9, 0, 0, 0, time.UTC)))
+	memberCookie := joinFamilyWithInvite(t, router, adminCookie, int(familyID), "delete-member")
+
+	deleteJSON(t, router, memberCookie, http.StatusForbidden, "/families/"+itoa(int(familyID))+"/media/7")
+	_, deleted := deleteJSON(t, router, adminCookie, http.StatusOK, "/families/"+itoa(int(familyID))+"/media/7")
+	if deleted["mediaAsset"].(map[string]any)["status"] != store.MediaStatusDeleted {
+		t.Fatalf("expected deleted media response, got %#v", deleted)
+	}
+	getJSON(t, router, adminCookie, http.StatusNotFound, "/families/"+itoa(int(familyID))+"/media/7")
+}
+
 func TestRemovedMemberCannotAccessTimelineOrMediaDetail(t *testing.T) {
 	appStore := &removedMemberAccessStore{MemoryStore: store.NewMemoryStore()}
 	router := newUploadTestRouter(appStore, fakeStorageService{})
@@ -992,6 +1062,52 @@ func TestRetryUploadItemRejectsAlreadyProcessingItem(t *testing.T) {
 	postJSON(t, router, rootCookie, http.StatusConflict, "/families/"+itoa(familyID)+"/uploads/"+itoa(batchID)+"/items/"+itoa(itemID)+"/retry-upload", map[string]any{})
 }
 
+func TestRetryProcessingItemAllowsCreatorOrAdmin(t *testing.T) {
+	appStore := &retryProcessingStore{
+		MemoryStore:    store.NewMemoryStore(),
+		retryableItems: map[int64]bool{},
+	}
+	router := newUploadTestRouter(appStore, fakeStorageService{})
+	adminCookie, familyID := createSignedInFamily(t, router, "retry-admin")
+	memberCookie := joinFamilyWithInvite(t, router, adminCookie, familyID, "retry-member")
+	otherMemberCookie := joinFamilyWithInvite(t, router, adminCookie, familyID, "retry-other-member")
+
+	_, uploadIntent := postJSON(t, router, memberCookie, http.StatusCreated, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+		"files": []map[string]any{
+			{
+				"filename":    "baby.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    12345,
+			},
+			{
+				"filename":    "baby-2.jpg",
+				"contentType": "image/jpeg",
+				"byteSize":    23456,
+			},
+		},
+	})
+	batch := uploadIntent["batch"].(map[string]any)
+	items := uploadIntent["items"].([]any)
+	batchID := int(batch["id"].(float64))
+	itemID := int(items[0].(map[string]any)["id"].(float64))
+	adminItemID := int(items[1].(map[string]any)["id"].(float64))
+	appStore.retryableItems[int64(itemID)] = true
+	appStore.retryableItems[int64(adminItemID)] = true
+	path := "/families/" + itoa(familyID) + "/uploads/" + itoa(batchID) + "/items/" + itoa(itemID) + "/retry-processing"
+	adminPath := "/families/" + itoa(familyID) + "/uploads/" + itoa(batchID) + "/items/" + itoa(adminItemID) + "/retry-processing"
+
+	postJSON(t, router, otherMemberCookie, http.StatusForbidden, path, map[string]any{})
+	_, creatorRetry := postJSON(t, router, memberCookie, http.StatusOK, path, map[string]any{})
+	if creatorRetry["item"].(map[string]any)["status"] != store.UploadItemStatusProcessing {
+		t.Fatalf("expected creator retry to requeue processing, got %#v", creatorRetry)
+	}
+	postJSON(t, router, memberCookie, http.StatusConflict, path, map[string]any{})
+	_, adminRetry := postJSON(t, router, adminCookie, http.StatusOK, adminPath, map[string]any{})
+	if adminRetry["batch"].(map[string]any)["id"] != float64(batchID) {
+		t.Fatalf("expected admin retry response for same batch, got %#v", adminRetry)
+	}
+}
+
 type nilFamiliesStore struct {
 	*store.MemoryStore
 }
@@ -1044,6 +1160,53 @@ func (s *mediaDetailStore) FindMediaDetail(_ context.Context, input store.FindMe
 		return store.MediaDetail{}, false, nil
 	}
 	return s.detail, true, nil
+}
+
+type softDeleteMediaStore struct {
+	*store.MemoryStore
+	detail  store.MediaDetail
+	deleted bool
+}
+
+func (s *softDeleteMediaStore) FindMediaDetail(_ context.Context, input store.FindMediaDetailInput) (store.MediaDetail, bool, error) {
+	if s.deleted || s.detail.Asset.FamilyID != input.FamilyID || s.detail.Asset.ID != input.MediaID {
+		return store.MediaDetail{}, false, nil
+	}
+	return s.detail, true, nil
+}
+
+func (s *softDeleteMediaStore) SoftDeleteMedia(_ context.Context, familyID int64, mediaID int64, now time.Time) (store.MediaAsset, error) {
+	if s.detail.Asset.FamilyID != familyID || s.detail.Asset.ID != mediaID {
+		return store.MediaAsset{}, store.ErrNotFound
+	}
+	s.deleted = true
+	asset := s.detail.Asset
+	asset.Status = store.MediaStatusDeleted
+	asset.DeletedAt = now
+	return asset, nil
+}
+
+type retryProcessingStore struct {
+	*store.MemoryStore
+	retryableItems map[int64]bool
+}
+
+func (s *retryProcessingStore) RetryProcessingItem(ctx context.Context, input store.UpdateUploadItemStatusInput) (store.UploadBatch, store.UploadItem, error) {
+	batch, ok, err := s.MemoryStore.FindUploadBatch(ctx, input.FamilyID, input.BatchID)
+	if err != nil || !ok {
+		return store.UploadBatch{}, store.UploadItem{}, store.ErrNotFound
+	}
+	if !s.retryableItems[input.ItemID] {
+		return store.UploadBatch{}, store.UploadItem{}, store.ErrInvalidUpload
+	}
+	s.retryableItems[input.ItemID] = false
+	return batch, store.UploadItem{
+		ID:            input.ItemID,
+		UploadBatchID: batch.ID,
+		MediaAssetID:  99,
+		Status:        store.UploadItemStatusProcessing,
+		UpdatedAt:     input.Now,
+	}, nil
 }
 
 type removedMemberAccessStore struct {
@@ -1162,6 +1325,32 @@ func getJSON(t *testing.T, router http.Handler, cookie *http.Cookie, expectedSta
 	router.ServeHTTP(response, request)
 	if response.Code != expectedStatus {
 		t.Fatalf("GET %s expected status %d, got %d with body %s", path, expectedStatus, response.Code, response.Body.String())
+	}
+
+	var decoded map[string]any
+	if response.Body.Len() > 0 {
+		if err := json.Unmarshal(response.Body.Bytes(), &decoded); err != nil {
+			t.Fatalf("decode response body: %v", err)
+		}
+	}
+	return cookie, decoded
+}
+
+func patchJSON(t *testing.T, router http.Handler, cookie *http.Cookie, expectedStatus int, path string, payload any) (*http.Cookie, map[string]any) {
+	t.Helper()
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+	request := httptest.NewRequest(http.MethodPatch, path, bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	if cookie != nil {
+		request.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, request)
+	if response.Code != expectedStatus {
+		t.Fatalf("PATCH %s expected status %d, got %d with body %s", path, expectedStatus, response.Code, response.Body.String())
 	}
 
 	var decoded map[string]any

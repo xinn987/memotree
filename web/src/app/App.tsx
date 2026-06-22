@@ -15,6 +15,7 @@ import {
   RefreshCw,
   RotateCw,
   Square,
+  Trash2,
   Upload,
   Users,
   XCircle,
@@ -45,9 +46,21 @@ type Invite = {
   usedAt?: string | null;
 };
 
+type FamilyMember = {
+  id: number;
+  familyId: number;
+  userId: number;
+  displayName: string;
+  role: "admin" | "member";
+  status: "active" | "removed";
+  joinedAt?: string | null;
+  removedAt?: string | null;
+};
+
 type UploadBatch = {
   id: number;
   familyId: number;
+  createdBy: number;
   status: UploadBatchStatus;
   totalCount: number;
   readyCount: number;
@@ -249,6 +262,12 @@ export function App() {
     setRoute(parseAppRoute());
   }
 
+  function updateFamilyMemberDisplayName(familyID: number, displayName: string) {
+    setFamilies((current) =>
+      current.map((family) => (family.id === familyID ? { ...family, memberDisplayName: displayName } : family)),
+    );
+  }
+
   if (loading) {
     return <main className="shell">加载中...</main>;
   }
@@ -280,7 +299,7 @@ export function App() {
       </header>
 
       <section className="account-bar">
-        <span>{user.displayName}</span>
+        <span>{selectedFamily?.memberDisplayName ?? user.displayName}</span>
         {user.isSystemAdmin && <strong>初始管理员</strong>}
       </section>
 
@@ -314,7 +333,9 @@ export function App() {
       ) : selectedFamily ? (
         <FamilyHome
           family={selectedFamily}
+          user={user}
           onMessage={setMessage}
+          onFamilyMemberDisplayNameChanged={updateFamilyMemberDisplayName}
           onOpenMedia={(mediaId) => navigateTo(`/families/${selectedFamily.id}/media/${mediaId}`)}
         />
       ) : (
@@ -471,6 +492,7 @@ function MediaDetailPage({
   const [media, setMedia] = useState<TimelineMedia | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -502,6 +524,22 @@ function MediaDetailPage({
       active = false;
     };
   }, [family.id, mediaId, onMessage]);
+
+  async function deleteMedia() {
+    setDeleting(true);
+    setError("");
+    try {
+      await request(`/families/${family.id}/media/${mediaId}`, {
+        method: "DELETE",
+      });
+      onMessage("已从家庭时间线移除这份媒体");
+      onBack();
+    } catch (error) {
+      setError(getErrorMessage(error));
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   return (
     <section className="media-detail-shell">
@@ -562,6 +600,12 @@ function MediaDetailPage({
                 <dd>{formatRenditionSize(media.display)}</dd>
               </div>
             </dl>
+            {family.role === "admin" && (
+              <button className="danger-button" type="button" onClick={() => void deleteMedia()} disabled={deleting}>
+                <Trash2 aria-hidden="true" size={16} />
+                {deleting ? "移除中..." : "从时间线移除"}
+              </button>
+            )}
           </section>
         </>
       )}
@@ -571,11 +615,15 @@ function MediaDetailPage({
 
 function FamilyHome({
   family,
+  user,
   onMessage,
+  onFamilyMemberDisplayNameChanged,
   onOpenMedia,
 }: {
   family: Family;
+  user: User;
   onMessage: (value: string) => void;
+  onFamilyMemberDisplayNameChanged: (familyID: number, displayName: string) => void;
   onOpenMedia: (mediaId: number) => void;
 }) {
   const [memberDisplayName, setMemberDisplayName] = useState("");
@@ -586,6 +634,11 @@ function FamilyHome({
   const [invitesLoading, setInvitesLoading] = useState(false);
   const [copiedInviteId, setCopiedInviteId] = useState<number | "latest" | null>(null);
   const [revokeBusyId, setRevokeBusyId] = useState<number | null>(null);
+  const [members, setMembers] = useState<FamilyMember[]>([]);
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [membersError, setMembersError] = useState("");
+  const [memberNames, setMemberNames] = useState<Record<number, string>>({});
+  const [memberBusyId, setMemberBusyId] = useState<number | null>(null);
   const [uploadTask, setUploadTask] = useState<UploadTask>({ batch: null, items: [] });
   const [recentUploadTasks, setRecentUploadTasks] = useState<UploadTask[]>([]);
   const [uploadBusy, setUploadBusy] = useState(false);
@@ -601,6 +654,7 @@ function FamilyHome({
   const [timelineLoadingMore, setTimelineLoadingMore] = useState(false);
   const [timelineError, setTimelineError] = useState("");
   const canManageInvites = family.role === "admin";
+  const canManageMembers = family.role === "admin";
 
   useEffect(() => {
     setUploadTask({ batch: null, items: [] });
@@ -629,6 +683,15 @@ function FamilyHome({
     }
     void loadInvites();
   }, [family.id, canManageInvites]);
+
+  useEffect(() => {
+    if (!canManageMembers) {
+      setMembers([]);
+      setMembersError("");
+      return;
+    }
+    void loadMembers();
+  }, [family.id, canManageMembers]);
 
   useEffect(() => {
     if (!shouldPollUploadTask(uploadTask)) {
@@ -705,6 +768,65 @@ function FamilyHome({
       setInviteError(getErrorMessage(error));
     } finally {
       setInvitesLoading(false);
+    }
+  }
+
+  async function loadMembers() {
+    if (!canManageMembers) {
+      return;
+    }
+    setMembersLoading(true);
+    setMembersError("");
+    try {
+      const data = await request<{ members: FamilyMember[] }>(`/families/${family.id}/members`);
+      setMembers(data.members);
+      setMemberNames(Object.fromEntries(data.members.map((member) => [member.id, member.displayName])));
+    } catch (error) {
+      setMembersError(getErrorMessage(error));
+    } finally {
+      setMembersLoading(false);
+    }
+  }
+
+  async function saveMemberName(member: FamilyMember) {
+    const displayName = (memberNames[member.id] ?? "").trim();
+    if (!displayName) {
+      setMembersError("成员称呼不能为空");
+      return;
+    }
+    setMemberBusyId(member.id);
+    setMembersError("");
+    try {
+      const data = await request<{ member: FamilyMember }>(`/families/${family.id}/members/${member.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ displayName }),
+      });
+      setMembers((current) => current.map((item) => (item.id === data.member.id ? data.member : item)));
+      setMemberNames((current) => ({ ...current, [data.member.id]: data.member.displayName }));
+      setMembersError("");
+      if (data.member.userId === user.id) {
+        onFamilyMemberDisplayNameChanged(family.id, data.member.displayName);
+      }
+    } catch (error) {
+      setMembersError(getErrorMessage(error));
+    } finally {
+      setMemberBusyId(null);
+    }
+  }
+
+  async function removeMember(member: FamilyMember) {
+    setMemberBusyId(member.id);
+    setMembersError("");
+    try {
+      const data = await request<{ member: FamilyMember }>(`/families/${family.id}/members/${member.id}`, {
+        method: "DELETE",
+      });
+      setMembers((current) => current.map((item) => (item.id === data.member.id ? data.member : item)));
+      setMemberNames((current) => ({ ...current, [data.member.id]: data.member.displayName }));
+    } catch (error) {
+      setMembersError(getErrorMessage(error));
+    } finally {
+      setMemberBusyId(null);
     }
   }
 
@@ -866,6 +988,23 @@ function FamilyHome({
     }
   }
 
+  async function retryProcessing(item: UploadItem, batch: UploadBatch) {
+    setUploadBusy(true);
+    setUploadError("");
+    try {
+      const retry = await request<{ batch: UploadBatch; item: UploadItem }>(
+        `/families/${family.id}/uploads/${batch.id}/items/${item.id}/retry-processing`,
+        { method: "POST", body: JSON.stringify({}) },
+      );
+      setUploadTask((current) => upsertUploadItem(current, retry.batch, retry.item));
+      setRecentUploadTasks((current) => upsertUploadTaskItem(current, retry.batch, retry.item));
+    } catch (error) {
+      setUploadError(getErrorMessage(error));
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
   async function stopUploadTask() {
     if (!uploadTask.batch) {
       return;
@@ -904,6 +1043,8 @@ function FamilyHome({
       <div className="main-column">
         <UploadPanel
           task={uploadTask}
+          family={family}
+          user={user}
           busy={uploadBusy}
           error={uploadError}
           progress={uploadProgress}
@@ -912,6 +1053,7 @@ function FamilyHome({
           recentTasks={recentUploadTasks}
           onFilesSelected={selectFiles}
           onRetry={retryUpload}
+          onRetryProcessing={retryProcessing}
           onStop={stopUploadTask}
           onRefresh={loadUploadTasks}
         />
@@ -933,7 +1075,8 @@ function FamilyHome({
       </div>
 
       {canManageInvites && (
-        <form className="panel form" onSubmit={createInvite}>
+        <>
+          <form className="panel form" onSubmit={createInvite}>
           <div className="panel-title">
             <LinkIcon aria-hidden="true" size={20} />
             <h2>邀请家人</h2>
@@ -997,7 +1140,64 @@ function FamilyHome({
               })
             )}
           </div>
-        </form>
+          </form>
+          <section className="panel form">
+          <div className="invite-list-header">
+            <div className="panel-title">
+              <Users aria-hidden="true" size={20} />
+              <h2>家庭成员</h2>
+            </div>
+            <button className="text-button" type="button" onClick={loadMembers} disabled={membersLoading}>
+              <RefreshCw aria-hidden="true" size={16} />
+              {membersLoading ? "刷新中" : "刷新"}
+            </button>
+          </div>
+          {membersError && <p className="form-message">{membersError}</p>}
+          <div className="invite-list">
+            {members.length === 0 ? (
+              <p className="muted-text">暂无成员记录</p>
+            ) : (
+              members.map((member) => {
+                const removed = member.status === "removed";
+                const isCurrentUser = member.userId === user.id;
+                const draftName = memberNames[member.id] ?? "";
+                const hasMemberNameChanged = draftName.trim() !== member.displayName;
+                return (
+                  <div className="invite-row" key={member.id}>
+                    <div>
+                      <strong>{member.displayName}</strong>
+                      <span>
+                        {member.role === "admin" ? "管理员" : "成员"} · {removed ? "已移除" : "在家庭中"}
+                        {isCurrentUser && " · 自己"}
+                      </span>
+                    </div>
+                    <div className="invite-actions">
+                      <input
+                        aria-label="成员称呼"
+                        value={draftName}
+                        disabled={removed || memberBusyId === member.id}
+                        onChange={(event) => setMemberNames((current) => ({ ...current, [member.id]: event.target.value }))}
+                      />
+                      {hasMemberNameChanged && (
+                        <button className="copy-button" type="button" onClick={() => void saveMemberName(member)} disabled={removed || memberBusyId === member.id}>
+                          <Check aria-hidden="true" size={16} />
+                          保存
+                        </button>
+                      )}
+                      {!isCurrentUser && !removed && (
+                        <button className="danger-button" type="button" onClick={() => void removeMember(member)} disabled={memberBusyId === member.id}>
+                          <XCircle aria-hidden="true" size={16} />
+                          移除
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+          </section>
+        </>
       )}
     </section>
   );
@@ -1122,6 +1322,8 @@ function TimelinePanel({
 
 function UploadPanel({
   task,
+  family,
+  user,
   busy,
   error,
   progress,
@@ -1130,10 +1332,13 @@ function UploadPanel({
   recentTasks,
   onFilesSelected,
   onRetry,
+  onRetryProcessing,
   onStop,
   onRefresh,
 }: {
   task: UploadTask;
+  family: Family;
+  user: User;
   busy: boolean;
   error: string;
   progress: Record<number, number>;
@@ -1142,6 +1347,7 @@ function UploadPanel({
   recentTasks: UploadTask[];
   onFilesSelected: (files: File[]) => Promise<void>;
   onRetry: (item: UploadItem) => Promise<void>;
+  onRetryProcessing: (item: UploadItem, batch: UploadBatch) => Promise<void>;
   onStop: () => Promise<void>;
   onRefresh: () => Promise<void>;
 }) {
@@ -1200,9 +1406,12 @@ function UploadPanel({
       {task.items.length > 0 && (
         <div className="upload-list">
           {task.items.map((item) => {
+            const currentBatch = task.batch;
             const isUploading = uploadingItemIds.has(item.id);
             const itemProgress = progress[item.id] ?? statusProgress(item.status);
             const canRetry = item.status === "upload_failed" && Boolean(localFilesByItemId[item.id]);
+            const canRetryProcessing =
+              item.status === "processing_failed" && currentBatch !== null && canRetryProcessingItem(currentBatch, family, user);
             return (
               <div className="upload-row" key={item.id}>
                 <div className="upload-file-icon">
@@ -1225,6 +1434,17 @@ function UploadPanel({
                   <button className="copy-button compact-button" type="button" onClick={() => void onRetry(item)} disabled={!canRetry || busy}>
                     <RotateCw aria-hidden="true" size={16} />
                     重试
+                  </button>
+                )}
+                {item.status === "processing_failed" && currentBatch && (
+                  <button
+                    className="copy-button compact-button"
+                    type="button"
+                    onClick={() => void onRetryProcessing(item, currentBatch)}
+                    disabled={!canRetryProcessing || busy}
+                  >
+                    <RotateCw aria-hidden="true" size={16} />
+                    重新处理
                   </button>
                 )}
               </div>
@@ -1422,6 +1642,10 @@ function shouldPollUploadTask(task: UploadTask) {
     return false;
   }
   return !["completed", "stopped", "partially_failed"].includes(task.batch.status);
+}
+
+function canRetryProcessingItem(batch: UploadBatch, family: Family, user: User) {
+  return family.role === "admin" || batch.createdBy === user.id;
 }
 
 function uploadItemStatusText(status: UploadItemStatus) {

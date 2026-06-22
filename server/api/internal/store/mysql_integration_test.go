@@ -127,6 +127,13 @@ func TestMySQLStoreIntegration(t *testing.T) {
 	if member.FamilyID != family.ID || member.Role != MemberRoleMember || member.DisplayName != "奶奶" {
 		t.Fatalf("unexpected joined member: %#v", member)
 	}
+	renamed, err := mysqlStore.UpdateFamilyMemberDisplayName(ctx, family.ID, member.ID, member.DisplayName)
+	if err != nil {
+		t.Fatalf("repeat update member display name with same value: %v", err)
+	}
+	if renamed.DisplayName != member.DisplayName {
+		t.Fatalf("expected unchanged display name to round-trip, got %#v", renamed)
+	}
 	isMember, err = mysqlStore.IsActiveMember(ctx, family.ID, second.ID)
 	if err != nil || !isMember {
 		t.Fatalf("joined user should be active family member, isMember=%v err=%v", isMember, err)

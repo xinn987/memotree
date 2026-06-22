@@ -456,3 +456,161 @@ func TestMemoryStoreFindMediaDetailReturnsOnlyVisibleReadyAsset(t *testing.T) {
 		}
 	}
 }
+
+func TestMemoryStoreMemberManagementProtectsLastAdmin(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
+	memoryStore := NewMemoryStore()
+
+	root, err := memoryStore.CreateUser(ctx, "root-last-admin", "hash", "root")
+	if err != nil {
+		t.Fatalf("create root user: %v", err)
+	}
+	grandma, err := memoryStore.CreateUser(ctx, "grandma-member", "hash", "grandma")
+	if err != nil {
+		t.Fatalf("create grandma user: %v", err)
+	}
+	family, err := memoryStore.CreateFamily(ctx, "family", DefaultFamilyTimezone, root.ID, root.DisplayName)
+	if err != nil {
+		t.Fatalf("create family: %v", err)
+	}
+	invite, err := memoryStore.CreateInvite(ctx, family.ID, "member-hash", "member-token", root.ID, "grandma", now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	member, err := memoryStore.JoinInvite(ctx, invite.TokenHash, grandma.ID, grandma.DisplayName, now)
+	if err != nil {
+		t.Fatalf("join invite: %v", err)
+	}
+
+	if _, err := memoryStore.RemoveFamilyMember(ctx, family.ID, 1, root.ID, now); err != ErrSelfRemoval {
+		t.Fatalf("expected self removal protection, got %v", err)
+	}
+	if _, err := memoryStore.RemoveFamilyMember(ctx, family.ID, 1, grandma.ID, now); err != ErrLastAdmin {
+		t.Fatalf("expected last admin protection, got %v", err)
+	}
+	renamed, err := memoryStore.UpdateFamilyMemberDisplayName(ctx, family.ID, member.ID, "grandma nickname")
+	if err != nil {
+		t.Fatalf("update member name: %v", err)
+	}
+	if renamed.DisplayName != "grandma nickname" {
+		t.Fatalf("expected family-specific display name to change, got %#v", renamed)
+	}
+	removed, err := memoryStore.RemoveFamilyMember(ctx, family.ID, member.ID, root.ID, now)
+	if err != nil {
+		t.Fatalf("remove member: %v", err)
+	}
+	if removed.Status != MemberStatusRemoved || removed.RemovedAt.IsZero() {
+		t.Fatalf("expected removed member with timestamp, got %#v", removed)
+	}
+	isMember, err := memoryStore.IsActiveMember(ctx, family.ID, grandma.ID)
+	if err != nil || isMember {
+		t.Fatalf("removed member should lose active membership, isMember=%v err=%v", isMember, err)
+	}
+}
+
+func TestMemoryStoreSoftDeleteMediaHidesTimelineAndDetail(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
+	memoryStore := NewMemoryStore()
+
+	root, err := memoryStore.CreateUser(ctx, "root-soft-delete", "hash", "root")
+	if err != nil {
+		t.Fatalf("create root user: %v", err)
+	}
+	family, err := memoryStore.CreateFamily(ctx, "family", DefaultFamilyTimezone, root.ID, root.DisplayName)
+	if err != nil {
+		t.Fatalf("create family: %v", err)
+	}
+	memoryStore.mu.Lock()
+	memoryStore.mediaAssets[1] = MediaAsset{ID: 1, FamilyID: family.ID, UploadedBy: root.ID, MediaType: MediaTypePhoto, Status: MediaStatusActive, RenditionStatus: RenditionStatusReady, UploadedAt: now}
+	memoryStore.mediaRenditions[1] = MediaRendition{ID: 1, MediaAssetID: 1, RenditionType: RenditionTypeDisplayImage, ObjectKey: "previews/display.jpg", Status: RenditionStatusReady}
+	memoryStore.mu.Unlock()
+
+	if items, err := memoryStore.ListTimelineMedia(ctx, ListTimelineMediaInput{FamilyID: family.ID}); err != nil || len(items) != 1 {
+		t.Fatalf("expected visible media before delete, items=%#v err=%v", items, err)
+	}
+	deleted, err := memoryStore.SoftDeleteMedia(ctx, family.ID, 1, now)
+	if err != nil {
+		t.Fatalf("soft delete media: %v", err)
+	}
+	if deleted.Status != MediaStatusDeleted || deleted.DeletedAt.IsZero() {
+		t.Fatalf("expected deleted media status, got %#v", deleted)
+	}
+	if items, err := memoryStore.ListTimelineMedia(ctx, ListTimelineMediaInput{FamilyID: family.ID}); err != nil || len(items) != 0 {
+		t.Fatalf("expected deleted media to leave timeline, items=%#v err=%v", items, err)
+	}
+	if detail, ok, err := memoryStore.FindMediaDetail(ctx, FindMediaDetailInput{FamilyID: family.ID, MediaID: 1}); err != nil || ok {
+		t.Fatalf("expected deleted media detail to be unavailable, ok=%v detail=%#v err=%v", ok, detail, err)
+	}
+}
+
+func TestMemoryStoreRetryProcessingItemRequeuesExistingMedia(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
+	memoryStore := NewMemoryStore()
+
+	root, err := memoryStore.CreateUser(ctx, "root-retry-processing", "hash", "root")
+	if err != nil {
+		t.Fatalf("create root user: %v", err)
+	}
+	family, err := memoryStore.CreateFamily(ctx, "family", DefaultFamilyTimezone, root.ID, root.DisplayName)
+	if err != nil {
+		t.Fatalf("create family: %v", err)
+	}
+	batch, items, err := memoryStore.CreateUploadBatch(ctx, CreateUploadBatchInput{
+		FamilyID:  family.ID,
+		CreatedBy: root.ID,
+		Items: []CreateUploadItemInput{{
+			OriginalType:     OriginalTypeImage,
+			OriginalFilename: "baby.jpg",
+			ContentType:      "image/jpeg",
+			ByteSize:         12345,
+			ObjectKey:        "originals/baby.jpg",
+		}},
+		Now: now,
+	})
+	if err != nil {
+		t.Fatalf("create upload batch: %v", err)
+	}
+	_, processingItem, asset, err := memoryStore.CompleteUploadItem(ctx, CompleteUploadItemInput{
+		FamilyID:   family.ID,
+		BatchID:    batch.ID,
+		ItemID:     items[0].ID,
+		UploadedBy: root.ID,
+		Now:        now,
+	})
+	if err != nil {
+		t.Fatalf("complete upload item: %v", err)
+	}
+	memoryStore.mu.Lock()
+	processingItem.Status = UploadItemStatusProcessingFailed
+	processingItem.ErrorMessage = "decoder failed"
+	processingItem.CompletedAt = now
+	memoryStore.uploadItems[processingItem.ID] = processingItem
+	asset.RenditionStatus = RenditionStatusFailed
+	memoryStore.mediaAssets[asset.ID] = asset
+	memoryStore.uploadBatches[batch.ID] = memoryStore.recalculateUploadBatch(batch)
+	memoryStore.mu.Unlock()
+
+	retriedBatch, retriedItem, err := memoryStore.RetryProcessingItem(ctx, UpdateUploadItemStatusInput{
+		FamilyID: family.ID,
+		BatchID:  batch.ID,
+		ItemID:   processingItem.ID,
+		Now:      now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("retry processing item: %v", err)
+	}
+	if retriedItem.Status != UploadItemStatusProcessing || retriedItem.ErrorMessage != "" || !retriedItem.CompletedAt.IsZero() {
+		t.Fatalf("expected processing item to be requeued, got %#v", retriedItem)
+	}
+	if retriedBatch.Status != UploadBatchStatusProcessing || retriedBatch.FailedCount != 0 {
+		t.Fatalf("expected batch to return to processing, got %#v", retriedBatch)
+	}
+	memoryStore.mu.Lock()
+	defer memoryStore.mu.Unlock()
+	if memoryStore.mediaAssets[asset.ID].RenditionStatus != RenditionStatusPending {
+		t.Fatalf("expected media asset to return to pending, got %#v", memoryStore.mediaAssets[asset.ID])
+	}
+}

@@ -124,6 +124,21 @@ The system SHALL record basic media metadata and generate Web-compatible display
 - **WHEN** an upload item fails after the original file is stored but before display assets are ready
 - **THEN** the system allows retrying media processing without requiring the original file to be uploaded again
 
+#### Scenario: Upload creator can retry processing failure
+
+- **WHEN** the upload creator retries a processing-failed upload item
+- **THEN** the system resets that item and its media asset for background processing without creating a new upload item
+
+#### Scenario: Administrator can retry family processing failure
+
+- **WHEN** an active administrator retries a processing-failed upload item created by another family member
+- **THEN** the system resets that item and its media asset for background processing
+
+#### Scenario: Non-owner member cannot retry another member processing failure
+
+- **WHEN** a non-administrator member retries another member's processing-failed upload item
+- **THEN** the system denies the action
+
 ### Requirement: Upload Limits
 
 The system SHALL enforce configurable upload limits to protect mobile browser stability, storage cost, and media processing capacity.
@@ -151,4 +166,3 @@ The system SHALL allow administrators to remove mistaken or unwanted media from 
 
 - **WHEN** a non-administrator member attempts to delete a media asset
 - **THEN** the system denies the action
-

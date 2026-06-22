@@ -254,6 +254,109 @@ WHERE family_id = ? AND user_id = ? AND status = ?
 	return count > 0, err
 }
 
+func (s *MySQLStore) ListFamilyMembers(ctx context.Context, familyID int64) ([]FamilyMember, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT id, family_id, user_id, display_name, role, status, joined_at, removed_at
+FROM family_members
+WHERE family_id = ?
+ORDER BY CASE WHEN status = ? THEN 0 ELSE 1 END, id ASC
+`, familyID, MemberStatusActive)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	result := []FamilyMember{}
+	for rows.Next() {
+		member, err := scanFamilyMember(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, member)
+	}
+	return result, rows.Err()
+}
+
+func (s *MySQLStore) UpdateFamilyMemberDisplayName(ctx context.Context, familyID int64, memberID int64, displayName string) (FamilyMember, error) {
+	if _, err := s.db.ExecContext(ctx, `
+UPDATE family_members
+SET display_name = ?
+WHERE id = ? AND family_id = ?
+`, displayName, memberID, familyID); err != nil {
+		return FamilyMember{}, err
+	}
+	// MySQL 在保存相同值时 RowsAffected 可能为 0；这里用回读判断成员是否真实存在。
+	return s.findFamilyMemberByID(ctx, familyID, memberID)
+}
+
+func (s *MySQLStore) RemoveFamilyMember(ctx context.Context, familyID int64, memberID int64, actorUserID int64, now time.Time) (FamilyMember, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return FamilyMember{}, err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	if now.IsZero() {
+		now = time.Now()
+	}
+	member, err := scanFamilyMember(tx.QueryRowContext(ctx, `
+SELECT id, family_id, user_id, display_name, role, status, joined_at, removed_at
+FROM family_members
+WHERE id = ? AND family_id = ?
+FOR UPDATE
+`, memberID, familyID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return FamilyMember{}, ErrNotFound
+	}
+	if err != nil {
+		return FamilyMember{}, err
+	}
+	if member.UserID == actorUserID {
+		// 成员管理里的“移除”只用于移除他人；自己离开家庭需要单独的产品动作。
+		return FamilyMember{}, ErrSelfRemoval
+	}
+	if member.Status == MemberStatusRemoved {
+		return member, tx.Commit()
+	}
+	if member.Role == MemberRoleAdmin {
+		rows, err := tx.QueryContext(ctx, `
+SELECT id
+FROM family_members
+WHERE family_id = ? AND role = ? AND status = ?
+FOR UPDATE
+`, familyID, MemberRoleAdmin, MemberStatusActive)
+		if err != nil {
+			return FamilyMember{}, err
+		}
+		activeAdmins := 0
+		for rows.Next() {
+			activeAdmins++
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return FamilyMember{}, err
+		}
+		_ = rows.Close()
+		if activeAdmins <= 1 {
+			// 最后一个 active admin 不能被移除，否则家庭空间会失去可管理者。
+			return FamilyMember{}, ErrLastAdmin
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE family_members
+SET status = ?, removed_at = ?
+WHERE id = ?
+`, MemberStatusRemoved, now.UTC(), member.ID); err != nil {
+		return FamilyMember{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return FamilyMember{}, err
+	}
+	member.Status = MemberStatusRemoved
+	member.RemovedAt = now
+	return member, nil
+}
+
 // CreateInvite 保存邀请 token hash、token 原文和预填成员显示名。
 // MVP 阶段保存 token 原文，方便管理员在邀请管理里重新复制邀请链接。
 func (s *MySQLStore) CreateInvite(ctx context.Context, familyID int64, tokenHash string, tokenPlaintext string, createdBy int64, memberDisplayName string, expiresAt time.Time) (FamilyInvite, error) {
@@ -432,6 +535,7 @@ WHERE id = ?
 		member.DisplayName = displayName
 		member.Role = MemberRoleMember
 		member.Status = MemberStatusActive
+		member.RemovedAt = time.Time{}
 	} else {
 		result, err := tx.ExecContext(ctx, `
 INSERT INTO family_members (family_id, user_id, display_name, role, status)
@@ -630,6 +734,32 @@ WHERE ma.id = ?
 		Thumbnail:             item.Thumbnail,
 		Display:               item.Display,
 	}, true, nil
+}
+
+func (s *MySQLStore) SoftDeleteMedia(ctx context.Context, familyID int64, mediaID int64, now time.Time) (MediaAsset, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	result, err := s.db.ExecContext(ctx, `
+UPDATE media_assets
+SET status = ?, deleted_at = ?, updated_at = ?
+WHERE id = ? AND family_id = ? AND status = ?
+`, MediaStatusDeleted, now.UTC(), now.UTC(), mediaID, familyID, MediaStatusActive)
+	if err != nil {
+		return MediaAsset{}, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return MediaAsset{}, err
+	}
+	if affected == 0 {
+		return MediaAsset{}, ErrNotFound
+	}
+	return scanMediaAsset(s.db.QueryRowContext(ctx, `
+SELECT id, family_id, uploaded_by, media_type, status, rendition_status, captured_at, uploaded_at, deleted_at
+FROM media_assets
+WHERE id = ? AND family_id = ?
+`, mediaID, familyID))
 }
 
 // FindUploadBatch 按家庭和任务 ID 读取上传任务。
@@ -901,6 +1031,84 @@ func (s *MySQLStore) RetryUploadItem(ctx context.Context, input UpdateUploadItem
 	})
 }
 
+func (s *MySQLStore) RetryProcessingItem(ctx context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	defer rollbackUnlessCommitted(tx)
+
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	batch, err := scanUploadBatch(tx.QueryRowContext(ctx, `
+SELECT id, family_id, created_by, status, active_slot, total_count, ready_count, failed_count, cancelled_count, created_at, completed_at, stopped_at
+FROM upload_batches
+WHERE id = ? AND family_id = ?
+FOR UPDATE
+`, input.BatchID, input.FamilyID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, UploadItem{}, ErrNotFound
+	}
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	item, err := scanUploadItem(tx.QueryRowContext(ctx, `
+SELECT id, upload_batch_id, media_asset_id, original_type, original_filename, content_type, byte_size, object_key, status, error_message, created_at, updated_at, completed_at
+FROM upload_items
+WHERE id = ? AND upload_batch_id = ?
+FOR UPDATE
+`, input.ItemID, batch.ID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, UploadItem{}, ErrNotFound
+	}
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	if item.MediaAssetID == 0 || item.Status != UploadItemStatusProcessingFailed {
+		return UploadBatch{}, UploadItem{}, ErrInvalidUpload
+	}
+	if _, err := scanMediaAsset(tx.QueryRowContext(ctx, `
+SELECT id, family_id, uploaded_by, media_type, status, rendition_status, captured_at, uploaded_at, deleted_at
+FROM media_assets
+WHERE id = ? AND family_id = ? AND status = ?
+FOR UPDATE
+`, item.MediaAssetID, input.FamilyID, MediaStatusActive)); errors.Is(err, sql.ErrNoRows) {
+		return UploadBatch{}, UploadItem{}, ErrNotFound
+	} else if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+
+	// 原文件已经入库，重试只重新排队处理任务，不生成新的 upload item。
+	if _, err := tx.ExecContext(ctx, `
+UPDATE upload_items
+SET status = ?, error_message = NULL, updated_at = ?, completed_at = NULL
+WHERE id = ?
+`, UploadItemStatusProcessing, now.UTC(), item.ID); err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE media_assets
+SET rendition_status = ?, updated_at = ?
+WHERE id = ?
+`, RenditionStatusPending, now.UTC(), item.MediaAssetID); err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	batch, err = recalculateUploadBatchInTx(ctx, tx, batch)
+	if err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return UploadBatch{}, UploadItem{}, err
+	}
+	item.Status = UploadItemStatusProcessing
+	item.ErrorMessage = ""
+	item.UpdatedAt = now
+	item.CompletedAt = time.Time{}
+	return batch, item, nil
+}
+
 func (s *MySQLStore) updateUploadItemForRetry(
 	ctx context.Context,
 	input UpdateUploadItemStatusInput,
@@ -967,6 +1175,18 @@ WHERE id = ?
 	return batch, item, nil
 }
 
+func (s *MySQLStore) findFamilyMemberByID(ctx context.Context, familyID int64, memberID int64) (FamilyMember, error) {
+	member, err := scanFamilyMember(s.db.QueryRowContext(ctx, `
+SELECT id, family_id, user_id, display_name, role, status, joined_at, removed_at
+FROM family_members
+WHERE id = ? AND family_id = ?
+`, memberID, familyID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return FamilyMember{}, ErrNotFound
+	}
+	return member, err
+}
+
 func (s *MySQLStore) findUploadBatchByID(ctx context.Context, batchID int64) (UploadBatch, bool, error) {
 	batch, err := scanUploadBatch(s.db.QueryRowContext(ctx, `
 SELECT id, family_id, created_by, status, active_slot, total_count, ready_count, failed_count, cancelled_count, created_at, completed_at, stopped_at
@@ -1028,6 +1248,63 @@ type uploadBatchScanner interface {
 
 type uploadItemScanner interface {
 	Scan(dest ...any) error
+}
+
+type familyMemberScanner interface {
+	Scan(dest ...any) error
+}
+
+type mediaAssetScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanFamilyMember(scanner familyMemberScanner) (FamilyMember, error) {
+	var member FamilyMember
+	var removedAt sql.NullTime
+	err := scanner.Scan(
+		&member.ID,
+		&member.FamilyID,
+		&member.UserID,
+		&member.DisplayName,
+		&member.Role,
+		&member.Status,
+		&member.JoinedAt,
+		&removedAt,
+	)
+	if err != nil {
+		return FamilyMember{}, err
+	}
+	if removedAt.Valid {
+		member.RemovedAt = removedAt.Time
+	}
+	return member, nil
+}
+
+func scanMediaAsset(scanner mediaAssetScanner) (MediaAsset, error) {
+	var asset MediaAsset
+	var capturedAt sql.NullTime
+	var deletedAt sql.NullTime
+	err := scanner.Scan(
+		&asset.ID,
+		&asset.FamilyID,
+		&asset.UploadedBy,
+		&asset.MediaType,
+		&asset.Status,
+		&asset.RenditionStatus,
+		&capturedAt,
+		&asset.UploadedAt,
+		&deletedAt,
+	)
+	if err != nil {
+		return MediaAsset{}, err
+	}
+	if capturedAt.Valid {
+		asset.CapturedAt = capturedAt.Time
+	}
+	if deletedAt.Valid {
+		asset.DeletedAt = deletedAt.Time
+	}
+	return asset, nil
 }
 
 func scanUploadBatch(scanner uploadBatchScanner) (UploadBatch, error) {
@@ -1269,13 +1546,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 
 // findMemberInTx 在加入邀请事务中读取并锁定成员记录。
 func findMemberInTx(ctx context.Context, tx *sql.Tx, familyID int64, userID int64) (FamilyMember, bool, error) {
-	var member FamilyMember
-	err := tx.QueryRowContext(ctx, `
-SELECT id, family_id, user_id, display_name, role, status
+	member, err := scanFamilyMember(tx.QueryRowContext(ctx, `
+SELECT id, family_id, user_id, display_name, role, status, joined_at, removed_at
 FROM family_members
 WHERE family_id = ? AND user_id = ?
 FOR UPDATE
-`, familyID, userID).Scan(&member.ID, &member.FamilyID, &member.UserID, &member.DisplayName, &member.Role, &member.Status)
+`, familyID, userID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return FamilyMember{}, false, nil
 	}

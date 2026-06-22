@@ -64,6 +64,8 @@ var (
 	ErrAlreadyExists = errors.New("already exists")
 	ErrInvalidInvite = errors.New("invalid invite")
 	ErrInvalidUpload = errors.New("invalid upload")
+	ErrLastAdmin     = errors.New("last admin")
+	ErrSelfRemoval   = errors.New("self removal")
 )
 
 // User 是全局唯一用户身份。
@@ -116,6 +118,8 @@ type FamilyMember struct {
 	DisplayName string
 	Role        string
 	Status      string
+	JoinedAt    time.Time
+	RemovedAt   time.Time
 }
 
 // MediaAsset 是时间线和详情页展示的核心对象。
@@ -292,8 +296,12 @@ type Store interface {
 	ListFamiliesForUser(ctx context.Context, userID int64) ([]FamilySummary, error)
 	IsActiveMember(ctx context.Context, familyID int64, userID int64) (bool, error)
 	IsActiveAdmin(ctx context.Context, familyID int64, userID int64) (bool, error)
+	ListFamilyMembers(ctx context.Context, familyID int64) ([]FamilyMember, error)
+	UpdateFamilyMemberDisplayName(ctx context.Context, familyID int64, memberID int64, displayName string) (FamilyMember, error)
+	RemoveFamilyMember(ctx context.Context, familyID int64, memberID int64, actorUserID int64, now time.Time) (FamilyMember, error)
 	ListTimelineMedia(ctx context.Context, input ListTimelineMediaInput) ([]TimelineMedia, error)
 	FindMediaDetail(ctx context.Context, input FindMediaDetailInput) (MediaDetail, bool, error)
+	SoftDeleteMedia(ctx context.Context, familyID int64, mediaID int64, now time.Time) (MediaAsset, error)
 	CreateInvite(ctx context.Context, familyID int64, tokenHash string, tokenPlaintext string, createdBy int64, memberDisplayName string, expiresAt time.Time) (FamilyInvite, error)
 	ListInvitesForFamily(ctx context.Context, familyID int64) ([]FamilyInvite, error)
 	RevokeInvite(ctx context.Context, familyID int64, inviteID int64, now time.Time) (FamilyInvite, error)
@@ -306,5 +314,6 @@ type Store interface {
 	CompleteUploadItem(ctx context.Context, input CompleteUploadItemInput) (UploadBatch, UploadItem, MediaAsset, error)
 	MarkUploadItemFailed(ctx context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error)
 	RetryUploadItem(ctx context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error)
+	RetryProcessingItem(ctx context.Context, input UpdateUploadItemStatusInput) (UploadBatch, UploadItem, error)
 	CreateUploadBatch(ctx context.Context, input CreateUploadBatchInput) (UploadBatch, []UploadItem, error)
 }

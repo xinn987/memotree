@@ -69,8 +69,12 @@ func NewRouterWithDependencies(cfg config.Config, appStore store.Store, storageS
 	mux.HandleFunc("GET /auth/session", api.currentSession)
 	mux.HandleFunc("POST /families", api.requireAuth(api.createFamily))
 	mux.HandleFunc("GET /families", api.requireAuth(api.listFamilies))
+	mux.HandleFunc("GET /families/{familyId}/members", api.requireAuth(api.listFamilyMembers))
+	mux.HandleFunc("PATCH /families/{familyId}/members/{memberId}", api.requireAuth(api.updateFamilyMember))
+	mux.HandleFunc("DELETE /families/{familyId}/members/{memberId}", api.requireAuth(api.removeFamilyMember))
 	mux.HandleFunc("GET /families/{familyId}/timeline", api.requireAuth(api.listTimeline))
 	mux.HandleFunc("GET /families/{familyId}/media/{mediaId}", api.requireAuth(api.getMediaDetail))
+	mux.HandleFunc("DELETE /families/{familyId}/media/{mediaId}", api.requireAuth(api.deleteMedia))
 	mux.HandleFunc("POST /families/{familyId}/invites", api.requireAuth(api.createInvite))
 	mux.HandleFunc("GET /families/{familyId}/invites", api.requireAuth(api.listInvites))
 	mux.HandleFunc("DELETE /families/{familyId}/invites/{inviteId}", api.requireAuth(api.revokeInvite))
@@ -83,6 +87,7 @@ func NewRouterWithDependencies(cfg config.Config, appStore store.Store, storageS
 	mux.HandleFunc("POST /families/{familyId}/uploads/{batchId}/items/{itemId}/complete-upload", api.requireAuth(api.completeUploadItem))
 	mux.HandleFunc("POST /families/{familyId}/uploads/{batchId}/items/{itemId}/fail-upload", api.requireAuth(api.failUploadItem))
 	mux.HandleFunc("POST /families/{familyId}/uploads/{batchId}/items/{itemId}/retry-upload", api.requireAuth(api.retryUploadItem))
+	mux.HandleFunc("POST /families/{familyId}/uploads/{batchId}/items/{itemId}/retry-processing", api.requireAuth(api.retryProcessingItem))
 	return withRequestLog(mux)
 }
 
@@ -222,6 +227,116 @@ func (a *app) listFamilies(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"families": familyListResponse(families)})
+}
+
+func (a *app) listFamilyMembers(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	isAdmin, err := a.store.IsActiveAdmin(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isAdmin {
+		writeError(w, http.StatusForbidden, "只有家庭管理员可以查看成员")
+		return
+	}
+
+	members, err := a.store.ListFamilyMembers(r.Context(), familyID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取成员列表失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"members": memberListResponse(members)})
+}
+
+func (a *app) updateFamilyMember(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	memberID, err := parsePathID(r, "memberId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "成员 ID 不合法")
+		return
+	}
+	isAdmin, err := a.store.IsActiveAdmin(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isAdmin {
+		writeError(w, http.StatusForbidden, "只有家庭管理员可以修改成员称呼")
+		return
+	}
+
+	var input struct {
+		DisplayName string `json:"displayName"`
+	}
+	if !readJSON(w, r, &input) {
+		return
+	}
+	displayName := strings.TrimSpace(input.DisplayName)
+	if displayName == "" {
+		writeError(w, http.StatusBadRequest, "成员称呼不能为空")
+		return
+	}
+	member, err := a.store.UpdateFamilyMemberDisplayName(r.Context(), familyID, memberID, displayName)
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "成员不存在")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "更新成员称呼失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"member": memberResponse(member)})
+}
+
+func (a *app) removeFamilyMember(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	memberID, err := parsePathID(r, "memberId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "成员 ID 不合法")
+		return
+	}
+	isAdmin, err := a.store.IsActiveAdmin(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isAdmin {
+		writeError(w, http.StatusForbidden, "只有家庭管理员可以移除成员")
+		return
+	}
+
+	member, err := a.store.RemoveFamilyMember(r.Context(), familyID, memberID, current.ID, a.now())
+	switch {
+	case errors.Is(err, store.ErrSelfRemoval):
+		writeError(w, http.StatusConflict, "不能移除自己")
+		return
+	case errors.Is(err, store.ErrLastAdmin):
+		writeError(w, http.StatusConflict, "不能移除最后一位家庭管理员")
+		return
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "成员不存在")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "移除成员失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"member": memberResponse(member)})
 }
 
 func (a *app) createInvite(w http.ResponseWriter, r *http.Request) {
@@ -457,6 +572,40 @@ func (a *app) getMediaDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (a *app) deleteMedia(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	mediaID, err := parsePathID(r, "mediaId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "媒体 ID 不合法")
+		return
+	}
+	isAdmin, err := a.store.IsActiveAdmin(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isAdmin {
+		writeError(w, http.StatusForbidden, "只有家庭管理员可以删除媒体")
+		return
+	}
+
+	asset, err := a.store.SoftDeleteMedia(r.Context(), familyID, mediaID, a.now())
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "媒体不存在")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "删除媒体失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"mediaAsset": mediaAssetResponse(asset)})
 }
 
 func (a *app) createUploadIntents(w http.ResponseWriter, r *http.Request) {
@@ -976,6 +1125,77 @@ func (a *app) retryUploadItem(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *app) retryProcessingItem(w http.ResponseWriter, r *http.Request) {
+	current := currentUser(r)
+	familyID, err := parsePathID(r, "familyId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "家庭 ID 不合法")
+		return
+	}
+	batchID, err := parsePathID(r, "batchId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "上传任务 ID 不合法")
+		return
+	}
+	itemID, err := parsePathID(r, "itemId")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "上传文件 ID 不合法")
+		return
+	}
+	isMember, err := a.store.IsActiveMember(r.Context(), familyID, current.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+		return
+	}
+	if !isMember {
+		writeError(w, http.StatusForbidden, "只有家庭成员可以重试处理失败")
+		return
+	}
+	batch, ok, err := a.store.FindUploadBatch(r.Context(), familyID, batchID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "读取上传任务失败")
+		return
+	}
+	if !ok {
+		writeError(w, http.StatusNotFound, "上传任务不存在")
+		return
+	}
+	if batch.CreatedBy != current.ID {
+		isAdmin, err := a.store.IsActiveAdmin(r.Context(), familyID, current.ID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "校验家庭权限失败")
+			return
+		}
+		if !isAdmin {
+			writeError(w, http.StatusForbidden, "只能重试自己的处理失败文件")
+			return
+		}
+	}
+
+	updatedBatch, updatedItem, err := a.store.RetryProcessingItem(r.Context(), store.UpdateUploadItemStatusInput{
+		FamilyID:    familyID,
+		BatchID:     batch.ID,
+		ItemID:      itemID,
+		ActorUserID: current.ID,
+		Now:         a.now(),
+	})
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		writeError(w, http.StatusNotFound, "上传文件不存在")
+		return
+	case errors.Is(err, store.ErrInvalidUpload):
+		writeError(w, http.StatusConflict, "上传文件状态不允许重试处理")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "重试处理失败")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"batch": uploadBatchResponse(updatedBatch),
+		"item":  uploadItemResponse(updatedItem),
+	})
+}
+
 func (a *app) resolveUploadItemAction(w http.ResponseWriter, r *http.Request, ownerError string) (store.User, int64, store.UploadBatch, int64, bool) {
 	current := currentUser(r)
 	familyID, err := parsePathID(r, "familyId")
@@ -1112,10 +1332,40 @@ func inviteResponse(invite store.FamilyInvite, now time.Time) map[string]any {
 	}
 }
 
+func memberListResponse(members []store.FamilyMember) []map[string]any {
+	result := make([]map[string]any, 0, len(members))
+	for _, member := range members {
+		result = append(result, memberResponse(member))
+	}
+	return result
+}
+
+func memberResponse(member store.FamilyMember) map[string]any {
+	var removedAt any
+	if !member.RemovedAt.IsZero() {
+		removedAt = member.RemovedAt.Format(time.RFC3339)
+	}
+	var joinedAt any
+	if !member.JoinedAt.IsZero() {
+		joinedAt = member.JoinedAt.Format(time.RFC3339)
+	}
+	return map[string]any{
+		"id":          member.ID,
+		"familyId":    member.FamilyID,
+		"userId":      member.UserID,
+		"displayName": member.DisplayName,
+		"role":        member.Role,
+		"status":      member.Status,
+		"joinedAt":    joinedAt,
+		"removedAt":   removedAt,
+	}
+}
+
 func uploadBatchResponse(batch store.UploadBatch) map[string]any {
 	return map[string]any{
 		"id":             batch.ID,
 		"familyId":       batch.FamilyID,
+		"createdBy":      batch.CreatedBy,
 		"status":         batch.Status,
 		"totalCount":     batch.TotalCount,
 		"readyCount":     batch.ReadyCount,
