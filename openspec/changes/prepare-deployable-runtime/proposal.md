@@ -7,12 +7,13 @@ This is the right moment to harden deployment because storage, soft delete, retr
 ## What Changes
 
 - Add production-oriented container definitions for API, Worker, and Web/static serving.
-- Add deployment templates for staging-style runtime wiring, including MySQL, S3-compatible object storage, service environment variables, health checks, and startup order.
+- Add deployment templates for single-host staging-style runtime wiring, including API, Worker, Web, local Docker MySQL, external S3-compatible object storage, service environment variables, health checks, and startup order.
 - Clarify configuration profiles for `local`, `staging`, and `production`, including required secrets and safe defaults.
 - Establish migration and bucket initialization strategy for deployable environments.
 - Update CI so it verifies Go, Web, OpenSpec specs, and Docker image builds with versions aligned to the repository requirements.
 - Update tooling and docs so `node tools/check.mjs` validates current specs rather than archived changes.
 - Add a deployment runbook covering first staging deploy, smoke tests, logs, rollback, and data safety checks.
+- Make the MVP deployment photo-only: upload paths reject videos, Worker deployment does not require FFmpeg, and video processing remains a later expansion path.
 - Do not implement a provider-specific production deployment or full CD pipeline in this change.
 
 ## Capabilities
@@ -27,8 +28,8 @@ This is the right moment to harden deployment because storage, soft delete, retr
 
 ## Impact
 
-- `deploy/`: API/Web Dockerfiles, deployment templates, environment examples, and production-oriented compose or staging manifests.
+- `deploy/`: API/Web/Worker Dockerfiles, single-host deployment templates, environment examples, and production-oriented compose or staging manifests.
 - `.github/workflows/ci.yml`: Go/Web/OpenSpec checks and Docker image build validation.
 - `tools/`: check script updates, possible image-build or deploy-smoke helper scripts.
 - `docs/wiki/`: deployment, release, CI, environment, and operations documentation.
-- `server/api/`, `server/worker/`, `web/`: minimal changes only where needed to support container runtime, static serving, health/readiness behavior, or configuration clarity.
+- `server/api/`, `server/worker/`, `web/`: minimal changes only where needed to support container runtime, static serving, health/readiness behavior, photo-only MVP upload policy, or configuration clarity.

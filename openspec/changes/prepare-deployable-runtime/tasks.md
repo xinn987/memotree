@@ -1,7 +1,7 @@
 ## 1. Runtime Images
 
 - [ ] 1.1 Add an API Dockerfile that builds the Go API binary and starts the API server with production-compatible defaults.
-- [ ] 1.2 Review and adjust the Worker Dockerfile so it builds under CI, includes FFmpeg/FFprobe, and documents required runtime environment variables.
+- [ ] 1.2 Review and adjust the Worker Dockerfile so it builds under CI for photo-only MVP processing and documents required runtime environment variables.
 - [ ] 1.3 Add a Web/static Dockerfile and server configuration that serves the Vite production bundle and routes `/api/*` to the API service boundary.
 - [ ] 1.4 Add a local image-build helper or documented commands for building API, Worker, and Web images from the repository root.
 
@@ -11,6 +11,7 @@
 - [ ] 2.2 Update environment examples to distinguish local defaults from staging/production required secrets.
 - [ ] 2.3 Ensure production-like API and Worker startup fails clearly when required MySQL or object storage configuration is missing.
 - [ ] 2.4 Keep existing local development scripts working with Docker MySQL and MinIO defaults.
+- [ ] 2.5 Enforce the MVP photo-only upload policy in Web/API configuration or code paths so videos are rejected clearly before Worker processing.
 
 ## 3. Initialization And Operations
 
@@ -29,6 +30,6 @@
 ## 5. Staging Runbook And Verification
 
 - [ ] 5.1 Update release/deployment documentation with a first staging deployment runbook.
-- [ ] 5.2 Add smoke-test steps for account creation, family creation, upload authorization, object upload, Worker processing, timeline visibility, media soft delete, and processing retry.
+- [ ] 5.2 Add smoke-test steps for account creation, family creation, image upload authorization, object upload, Worker processing, timeline visibility, media soft delete, and processing retry.
 - [ ] 5.3 Run or document local compose-based deployment verification for the new templates.
 - [ ] 5.4 Run Go tests, frontend check/build, Docker image builds, and OpenSpec strict validation.

@@ -9,10 +9,10 @@ The system SHALL provide buildable runtime images for the API, Worker, and Web a
 - **WHEN** CI or an operator builds the API runtime image from the repository
 - **THEN** the build produces an image that starts the API server and exposes the existing health endpoint
 
-#### Scenario: Worker image builds with media dependencies
+#### Scenario: Worker image builds for photo processing
 
 - **WHEN** CI or an operator builds the Worker runtime image from the repository
-- **THEN** the build produces an image that contains the Worker binary and required FFmpeg/FFprobe runtime dependencies
+- **THEN** the build produces an image that contains the Worker binary and can process photo rendition jobs without requiring FFmpeg/FFprobe
 
 #### Scenario: Web image builds static assets
 
@@ -37,6 +37,25 @@ The system SHALL document and validate the required runtime configuration for lo
 
 - **WHEN** an API or Worker process starts in a production-like environment without required database or object storage configuration
 - **THEN** the process fails clearly rather than silently falling back to in-memory or disabled storage behavior
+
+### Requirement: Photo-Only MVP Deployment
+
+The system SHALL make the deployable MVP image-only until video processing is revisited in a later change.
+
+#### Scenario: Video upload is rejected before processing
+
+- **WHEN** a user or client attempts to create an upload intent for a video media type in the deployable MVP
+- **THEN** the API rejects the request with a clear unsupported media type response before any Worker job is created
+
+#### Scenario: Web upload entry point is image-only
+
+- **WHEN** a user chooses files from the MVP upload UI
+- **THEN** the UI only offers image file types and communicates unsupported selections clearly
+
+#### Scenario: Worker deployment does not require video tools
+
+- **WHEN** the Worker starts in the MVP deployment profile
+- **THEN** it does not fail solely because FFmpeg or FFprobe are unavailable
 
 ### Requirement: Deployment Initialization
 
@@ -85,10 +104,10 @@ The system SHALL provide a staging deployment runbook that an operator can follo
 - **WHEN** an operator follows the staging runbook
 - **THEN** it covers configuring environment variables, initializing schema and buckets, starting services, and checking health
 
-#### Scenario: Smoke test covers media pipeline
+#### Scenario: Smoke test covers image media pipeline
 
 - **WHEN** an operator completes a staging deployment
-- **THEN** the runbook includes smoke tests for account creation, family creation, upload authorization, object upload, Worker processing, timeline visibility, media soft delete, and processing retry
+- **THEN** the runbook includes smoke tests for account creation, family creation, image upload authorization, object upload, Worker processing, timeline visibility, media soft delete, and processing retry
 
 #### Scenario: Rollback and logs are documented
 
