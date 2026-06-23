@@ -1,0 +1,7 @@
+[mysqld]
+# 2 vCPU / 2 GiB VPS 的保守 MySQL 配置，优先避免内存被数据库吃满。
+innodb_buffer_pool_size=384M
+max_connections=30
+performance_schema=OFF
+tmp_table_size=32M
+max_heap_table_size=32M

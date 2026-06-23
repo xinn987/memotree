@@ -4,6 +4,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -50,6 +51,35 @@ func Load() Config {
 		SignedURLTTL:        time.Duration(getEnvInt("SIGNED_URL_TTL_SECONDS", 900)) * time.Second,
 		UploadMaxFileBytes:  getEnvInt64("UPLOAD_MAX_FILE_BYTES", 1073741824),
 		UploadMaxBatchCount: getEnvInt("UPLOAD_MAX_BATCH_COUNT", 50),
+	}
+}
+
+// ValidateRuntimeDependencies 校验类生产环境的关键依赖，避免误用内存库或禁用对象存储。
+func (c Config) ValidateRuntimeDependencies() error {
+	if !isProductionLike(c.AppEnv) {
+		return nil
+	}
+	if strings.TrimSpace(c.MySQLDSN) == "" {
+		return fmt.Errorf("MYSQL_DSN is required when APP_ENV=%s", c.AppEnv)
+	}
+	if strings.TrimSpace(c.StorageAccessKeyID) == "" || strings.TrimSpace(c.StorageSecretKey) == "" {
+		return fmt.Errorf("storage credentials are required when APP_ENV=%s", c.AppEnv)
+	}
+	if strings.TrimSpace(c.StorageEndpoint) == "" {
+		return fmt.Errorf("STORAGE_ENDPOINT is required when APP_ENV=%s", c.AppEnv)
+	}
+	if strings.TrimSpace(c.OriginalsBucket) == "" || strings.TrimSpace(c.PreviewsBucket) == "" {
+		return fmt.Errorf("storage bucket names are required when APP_ENV=%s", c.AppEnv)
+	}
+	return nil
+}
+
+func isProductionLike(appEnv string) bool {
+	switch strings.ToLower(strings.TrimSpace(appEnv)) {
+	case "", "local", "test":
+		return false
+	default:
+		return true
 	}
 }
 

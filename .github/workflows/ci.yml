@@ -15,7 +15,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm ci
         working-directory: web
       - run: npm run check
         working-directory: web
@@ -29,6 +29,36 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version: "1.24.x"
       - run: go test ./...
         working-directory: server
+
+  openspec:
+    name: OpenSpec validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @fission-ai/openspec
+      - run: openspec validate --specs --strict
+      - name: Validate active OpenSpec changes
+        run: |
+          node - <<'NODE'
+          const { execFileSync } = require('node:child_process');
+          const output = execFileSync('openspec', ['list', '--json'], { encoding: 'utf8' });
+          const changes = JSON.parse(output).changes ?? [];
+          for (const change of changes) {
+            execFileSync('openspec', ['validate', change.name, '--strict'], { stdio: 'inherit' });
+          }
+          NODE
+
+  images:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/api.Dockerfile -t memotree-api:ci .
+      - run: docker build -f deploy/worker.Dockerfile -t memotree-worker:ci .
+      - run: docker build -f deploy/web.Dockerfile -t memotree-web:ci .

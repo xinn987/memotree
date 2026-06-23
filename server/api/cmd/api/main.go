@@ -26,6 +26,9 @@ func main() {
 	defer cleanupLog()
 
 	cfg := config.Load()
+	if err := cfg.ValidateRuntimeDependencies(); err != nil {
+		log.Fatalf("invalid runtime configuration: %v", err)
+	}
 	ctx := context.Background()
 
 	// 默认使用内存 store，方便无数据库时快速启动和跑本地闭环。

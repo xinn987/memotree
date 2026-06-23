@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -39,6 +40,23 @@ func Load() Config {
 		FFmpegPath:          getEnv("FFMPEG_PATH", "ffmpeg"),
 		FFprobePath:         getEnv("FFPROBE_PATH", "ffprobe"),
 	}
+}
+
+// ValidateRuntimeDependencies 校验 Worker 必需依赖，启动早失败比静默空跑更容易排障。
+func (c Config) ValidateRuntimeDependencies() error {
+	if strings.TrimSpace(c.MySQLDSN) == "" {
+		return fmt.Errorf("MYSQL_DSN is required")
+	}
+	if strings.TrimSpace(c.StorageAccessKeyID) == "" || strings.TrimSpace(c.StorageSecretKey) == "" {
+		return fmt.Errorf("storage credentials are required")
+	}
+	if strings.TrimSpace(c.StorageEndpoint) == "" {
+		return fmt.Errorf("STORAGE_ENDPOINT is required")
+	}
+	if strings.TrimSpace(c.OriginalsBucket) == "" || strings.TrimSpace(c.PreviewsBucket) == "" {
+		return fmt.Errorf("storage bucket names are required")
+	}
+	return nil
 }
 
 func getEnv(key string, fallback string) string {

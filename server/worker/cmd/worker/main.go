@@ -22,19 +22,11 @@ func main() {
 	defer cleanupLog()
 
 	cfg := config.Load()
-	if cfg.MySQLDSN == "" {
-		log.Fatal("MYSQL_DSN is required for media worker")
-	}
-	if cfg.StorageAccessKeyID == "" || cfg.StorageSecretKey == "" {
-		log.Fatal("storage credentials are required for media worker")
+	if err := cfg.ValidateRuntimeDependencies(); err != nil {
+		log.Fatalf("invalid runtime configuration: %v", err)
 	}
 
 	ctx := context.Background()
-	videoTools, err := media.CheckVideoTools(ctx, cfg.FFmpegPath, cfg.FFprobePath)
-	if err != nil {
-		log.Fatalf("video processing dependencies are unavailable: %v", err)
-	}
-	log.Printf("video processing dependencies ready ffmpeg=%q ffprobe=%q", videoTools.FFmpeg, videoTools.FFprobe)
 
 	db, err := sql.Open("mysql", cfg.MySQLDSN)
 	if err != nil {
@@ -62,10 +54,16 @@ func main() {
 		ObjectStore:     media.S3ObjectStore{Service: s3Storage},
 		OriginalsBucket: cfg.OriginalsBucket,
 		PreviewsBucket:  cfg.PreviewsBucket,
-		VideoTranscoder: media.FFmpegTranscoder{
+	}
+	if videoTools, err := media.CheckVideoTools(ctx, cfg.FFmpegPath, cfg.FFprobePath); err == nil {
+		processor.VideoTranscoder = media.FFmpegTranscoder{
 			Path:        cfg.FFmpegPath,
 			FFprobePath: cfg.FFprobePath,
-		},
+		}
+		log.Printf("optional video processing dependencies ready ffmpeg=%q ffprobe=%q", videoTools.FFmpeg, videoTools.FFprobe)
+	} else {
+		// MVP 阶段只处理图片；没有 FFmpeg 时仍可正常启动，避免部署被视频能力卡住。
+		log.Printf("optional video processing disabled: %v", err)
 	}
 	runner := media.Runner{
 		Repository:   repository,

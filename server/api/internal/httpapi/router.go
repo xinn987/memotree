@@ -1619,12 +1619,22 @@ func parsePathID(r *http.Request, name string) (int64, error) {
 
 func originalTypeForContentType(contentType string) (string, error) {
 	switch {
-	case strings.HasPrefix(contentType, "image/"):
+	case isSupportedImageContentType(contentType):
 		return store.OriginalTypeImage, nil
 	case strings.HasPrefix(contentType, "video/"):
-		return store.OriginalTypeVideo, nil
+		// MVP 部署先只开放图片上传，避免小规格服务器被视频转码拖垮。
+		return "", fmt.Errorf("当前版本暂不支持上传视频，请先上传照片")
 	default:
 		return "", fmt.Errorf("暂不支持该文件类型")
+	}
+}
+
+func isSupportedImageContentType(contentType string) bool {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/jpeg", "image/png", "image/gif":
+		return true
+	default:
+		return false
 	}
 }
 

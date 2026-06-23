@@ -1,0 +1,119 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./mysql-small.cnf:/etc/mysql/conf.d/memotree.cnf:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  schema-init:
+    image: mysql:8.4
+    profiles: ["init"]
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    volumes:
+      - ../server/migrations:/schema:ro
+    command: >
+      sh -c "mysql -hmysql -uroot -p$$MYSQL_ROOT_PASSWORD $$MYSQL_DATABASE < /schema/0001_initial_schema.sql"
+
+  init-storage:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+    image: memotree-api:local
+    profiles: ["init"]
+    environment:
+      APP_ENV: ${APP_ENV}
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT}
+      STORAGE_REGION: ${STORAGE_REGION}
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY}
+      STORAGE_USE_PATH_STYLE: ${STORAGE_USE_PATH_STYLE}
+      STORAGE_BUCKET_ORIGINALS: ${STORAGE_BUCKET_ORIGINALS}
+      STORAGE_BUCKET_PREVIEWS: ${STORAGE_BUCKET_PREVIEWS}
+    entrypoint: ["/app/memotree-init-storage"]
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/api.Dockerfile
+    image: memotree-api:local
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV}
+      API_ADDR: :8080
+      MYSQL_DSN: ${MYSQL_DSN}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS}
+      STORAGE_PROVIDER: ${STORAGE_PROVIDER}
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT}
+      STORAGE_REGION: ${STORAGE_REGION}
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY}
+      STORAGE_USE_PATH_STYLE: ${STORAGE_USE_PATH_STYLE}
+      STORAGE_BUCKET_ORIGINALS: ${STORAGE_BUCKET_ORIGINALS}
+      STORAGE_BUCKET_PREVIEWS: ${STORAGE_BUCKET_PREVIEWS}
+      SIGNED_URL_TTL_SECONDS: ${SIGNED_URL_TTL_SECONDS}
+      UPLOAD_MAX_FILE_BYTES: ${UPLOAD_MAX_FILE_BYTES}
+      UPLOAD_MAX_BATCH_COUNT: ${UPLOAD_MAX_BATCH_COUNT}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/worker.Dockerfile
+    image: memotree-worker:local
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      api:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV}
+      MYSQL_DSN: ${MYSQL_DSN}
+      STORAGE_ENDPOINT: ${STORAGE_ENDPOINT}
+      STORAGE_REGION: ${STORAGE_REGION}
+      STORAGE_ACCESS_KEY_ID: ${STORAGE_ACCESS_KEY_ID}
+      STORAGE_SECRET_ACCESS_KEY: ${STORAGE_SECRET_ACCESS_KEY}
+      STORAGE_USE_PATH_STYLE: ${STORAGE_USE_PATH_STYLE}
+      STORAGE_BUCKET_ORIGINALS: ${STORAGE_BUCKET_ORIGINALS}
+      STORAGE_BUCKET_PREVIEWS: ${STORAGE_BUCKET_PREVIEWS}
+      MEDIA_WORKER_CONCURRENCY: ${MEDIA_WORKER_CONCURRENCY}
+      MEDIA_WORKER_POLL_INTERVAL_SECONDS: ${MEDIA_WORKER_POLL_INTERVAL_SECONDS}
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/web.Dockerfile
+    image: memotree-web:local
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+
+volumes:
+  mysql-data:

@@ -55,3 +55,22 @@ func TestLoadStorageAndDatabaseConfig(t *testing.T) {
 		t.Fatalf("expected ffmpeg config to be loaded, got %#v", cfg)
 	}
 }
+
+func TestValidateRuntimeDependencies(t *testing.T) {
+	cfg := Config{}
+	if err := cfg.ValidateRuntimeDependencies(); err == nil {
+		t.Fatal("expected missing worker dependencies to fail")
+	}
+
+	cfg = Config{
+		MySQLDSN:           "memotree:secret@tcp(mysql:3306)/memotree?parseTime=true",
+		StorageEndpoint:    "https://example.r2.cloudflarestorage.com",
+		StorageAccessKeyID: "key",
+		StorageSecretKey:   "secret",
+		OriginalsBucket:    "originals",
+		PreviewsBucket:     "previews",
+	}
+	if err := cfg.ValidateRuntimeDependencies(); err != nil {
+		t.Fatalf("expected complete worker dependencies to pass: %v", err)
+	}
+}

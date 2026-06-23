@@ -307,6 +307,28 @@ func TestCreateUploadIntentValidatesRequestBoundaries(t *testing.T) {
 		})
 	})
 
+	t.Run("rejects video before worker processing", func(t *testing.T) {
+		router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+		rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+		postJSON(t, router, rootCookie, http.StatusBadRequest, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+			"files": []map[string]any{
+				{"filename": "clip.mp4", "contentType": "video/mp4", "byteSize": 12345},
+			},
+		})
+	})
+
+	t.Run("rejects image formats the worker cannot decode", func(t *testing.T) {
+		router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
+		rootCookie, familyID := createSignedInFamily(t, router, "root")
+
+		postJSON(t, router, rootCookie, http.StatusBadRequest, "/families/"+itoa(familyID)+"/media/upload-intents", map[string]any{
+			"files": []map[string]any{
+				{"filename": "photo.heic", "contentType": "image/heic", "byteSize": 12345},
+			},
+		})
+	})
+
 	t.Run("rejects batch count and file size limits", func(t *testing.T) {
 		router := newUploadTestRouter(store.NewMemoryStore(), fakeStorageService{})
 		rootCookie, familyID := createSignedInFamily(t, router, "root")

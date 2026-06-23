@@ -882,6 +882,11 @@ function FamilyHome({
     if (files.length === 0) {
       return;
     }
+    const unsupported = files.find((file) => !isSupportedImageFile(file));
+    if (unsupported) {
+      setUploadError(`当前版本暂不支持上传视频或其他文件：${unsupported.name}`);
+      return;
+    }
     setUploadBusy(true);
     setUploadError("");
     setUploadProgress({});
@@ -1371,7 +1376,7 @@ function UploadPanel({
         <input
           type="file"
           multiple
-          accept="image/*,video/*"
+          accept="image/jpeg,image/png,image/gif"
           disabled={busy || Boolean(active)}
           onChange={(event) => {
             const files = Array.from(event.target.files ?? []);
@@ -1382,8 +1387,8 @@ function UploadPanel({
         <span className="upload-drop-icon">
           <Upload aria-hidden="true" size={22} />
         </span>
-        <strong>{active ? "当前有进行中的上传任务" : "选择照片或视频"}</strong>
-        <small>{active ? "完成、停止或刷新当前任务后继续" : "支持多选，文件会直接上传到私有对象存储"}</small>
+        <strong>{active ? "当前有进行中的上传任务" : "选择照片"}</strong>
+        <small>{active ? "完成、停止或刷新当前任务后继续" : "支持 JPG、PNG、GIF 多选，文件会直接上传到私有对象存储"}</small>
       </label>
 
       {task.batch && (
@@ -1610,19 +1615,21 @@ function mergeTimelineGroups(current: TimelineGroup[], incoming: TimelineGroup[]
 
 function fallbackContentType(filename: string) {
   const lower = filename.toLowerCase();
-  if (lower.endsWith(".mp4")) {
-    return "video/mp4";
-  }
-  if (lower.endsWith(".mov")) {
-    return "video/quicktime";
-  }
   if (lower.endsWith(".png")) {
     return "image/png";
   }
-  if (lower.endsWith(".heic") || lower.endsWith(".heif")) {
-    return "image/heic";
+  if (lower.endsWith(".gif")) {
+    return "image/gif";
   }
-  return "image/jpeg";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
+    return "image/jpeg";
+  }
+  return "application/octet-stream";
+}
+
+function isSupportedImageFile(file: File) {
+  const contentType = file.type || fallbackContentType(file.name);
+  return ["image/jpeg", "image/png", "image/gif"].includes(contentType);
 }
 
 function uploadBatchStatusText(status: UploadBatchStatus) {

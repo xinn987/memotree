@@ -1,0 +1,11 @@
+.git
+.gocache
+.gomodcache
+.gopath
+node_modules
+web/node_modules
+web/dist
+web/.npm-cache
+server/logs
+deploy/.env.staging
+*.log
