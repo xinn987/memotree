@@ -34,7 +34,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/api.Dockerfile
-    image: memotree-api:local
+    image: ${API_IMAGE:-memotree-api:local}
     profiles: ["init"]
     environment:
       APP_ENV: ${APP_ENV}
@@ -51,7 +51,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/api.Dockerfile
-    image: memotree-api:local
+    image: ${API_IMAGE:-memotree-api:local}
     restart: unless-stopped
     depends_on:
       mysql:
@@ -83,7 +83,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/worker.Dockerfile
-    image: memotree-worker:local
+    image: ${WORKER_IMAGE:-memotree-worker:local}
     restart: unless-stopped
     depends_on:
       mysql:
@@ -107,7 +107,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/web.Dockerfile
-    image: memotree-web:local
+    image: ${WEB_IMAGE:-memotree-web:local}
     restart: unless-stopped
     depends_on:
       api:
