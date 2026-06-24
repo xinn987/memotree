@@ -17,9 +17,6 @@ if (process.argv.includes("--help") || process.argv.includes("-h")) {
 const dockerConfigDir = path.join(repoRoot, ".docker-config");
 mkdirSync(dockerConfigDir, { recursive: true });
 const dockerEnv = { DOCKER_CONFIG: dockerConfigDir };
-if (process.platform === "win32") {
-  dockerEnv.DOCKER_HOST = "npipe:////./pipe/dockerDesktopLinuxEngine";
-}
 const env = projectEnv(dockerEnv);
 
 const images = [
