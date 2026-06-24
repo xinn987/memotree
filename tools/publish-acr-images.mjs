@@ -30,9 +30,6 @@ const dockerConfig = process.env.DOCKER_CONFIG || path.join(repoRoot, ".docker-c
 mkdirSync(dockerConfig, { recursive: true });
 
 const dockerEnv = { DOCKER_CONFIG: dockerConfig };
-if (process.platform === "win32") {
-  dockerEnv.DOCKER_HOST = "npipe:////./pipe/dockerDesktopLinuxEngine";
-}
 const env = projectEnv(dockerEnv);
 
 const images = [
