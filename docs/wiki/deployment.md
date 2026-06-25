@@ -53,21 +53,21 @@ memotree-web
 
 ```bash
 export DOCKER_CONFIG="$PWD/.docker-config"
-docker login registry.cn-hangzhou.aliyuncs.com
+docker login crpi-niameksqgqq8nnw0.cn-hangzhou.personal.cr.aliyuncs.com
 ```
 
 Windows PowerShell：
 
 ```powershell
 $env:DOCKER_CONFIG="$PWD\.docker-config"
-docker login registry.cn-hangzhou.aliyuncs.com
+docker login --username=wlgq987 crpi-niameksqgqq8nnw0.cn-hangzhou.personal.cr.aliyuncs.com
 ```
 
-发布镜像：
+发布镜像并生成版本单：
 
 ```bash
-export ACR_REGISTRY=registry.cn-hangzhou.aliyuncs.com
-export ACR_NAMESPACE=你的命名空间
+export ACR_REGISTRY=crpi-niameksqgqq8nnw0.cn-hangzhou.personal.cr.aliyuncs.com
+export ACR_NAMESPACE=memotree
 export IMAGE_TAG=$(git rev-parse --short=12 HEAD)
 node tools/publish-acr-images.mjs
 ```
@@ -75,13 +75,19 @@ node tools/publish-acr-images.mjs
 Windows PowerShell：
 
 ```powershell
-$env:ACR_REGISTRY="registry.cn-hangzhou.aliyuncs.com"
-$env:ACR_NAMESPACE="你的命名空间"
+$env:ACR_REGISTRY="crpi-niameksqgqq8nnw0.cn-hangzhou.personal.cr.aliyuncs.com"
+$env:ACR_NAMESPACE="memotree"
 $env:IMAGE_TAG=(git rev-parse --short=12 HEAD)
 node tools/publish-acr-images.mjs
 ```
 
-脚本结束会打印三行 `API_IMAGE`、`WORKER_IMAGE`、`WEB_IMAGE`，把它们填进服务器的 `deploy/.env.staging`。
+脚本结束后会写入：
+
+```text
+deploy/releases/staging-current.env
+```
+
+这个文件只包含镜像地址和发布元信息，不包含 MySQL 密码、R2 key、bucket 凭据等长期密钥。
 
 如果不使用 ACR，也可以在服务器本地构建：
 
@@ -105,6 +111,8 @@ docker build -f deploy/web.Dockerfile -t memotree-web:local .
 
 ## 首次 Staging 部署
 
+首次部署仍然建议手动做，因为它包含外部控制台动作和长期密钥配置。
+
 1. 在服务器安装 Docker、Docker Compose plugin、Git。
 
 2. 拉取仓库，并切到部署分支：
@@ -124,39 +132,43 @@ cp deploy/.env.staging.example deploy/.env.staging
 4. 编辑 `deploy/.env.staging`：
 
 - `PUBLIC_BASE_URL` 先填服务器公网地址，例如 `http://120.26.28.65`。
-- `API_IMAGE`、`WORKER_IMAGE`、`WEB_IMAGE` 填 ACR 镜像地址。
 - `MYSQL_PASSWORD` 和 `MYSQL_ROOT_PASSWORD` 必须换成强密码。
 - `MYSQL_DSN` 里的密码必须和 `MYSQL_PASSWORD` 一致。
 - `STORAGE_ENDPOINT`、`STORAGE_ACCESS_KEY_ID`、`STORAGE_SECRET_ACCESS_KEY` 填 R2 或其他 S3 兼容存储。
 - `STORAGE_BUCKET_ORIGINALS` 和 `STORAGE_BUCKET_PREVIEWS` 建议 staging/production 分开。
 - `MEDIA_WORKER_CONCURRENCY=1`，适合 2 vCPU / 2 GiB 初期服务器。
 
-5. 检查 compose 配置：
+5. 在开发机发布镜像并把版本单复制到服务器：
+
+```bash
+scp deploy/releases/staging-current.env root@120.26.28.65:/root/repos/memotree/deploy/releases/staging-current.env
+```
+
+6. 服务器登录 ACR：
+
+```bash
+docker login crpi-niameksqgqq8nnw0.cn-hangzhou.personal.cr.aliyuncs.com
+```
+
+7. 检查 compose 配置：
 
 ```bash
 docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml config
 ```
 
-6. 登录 ACR 并拉取业务镜像：
-
-```bash
-docker login registry.cn-hangzhou.aliyuncs.com
-docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml pull api worker web init-storage
-```
-
-7. 启动 MySQL：
+8. 启动 MySQL：
 
 ```bash
 docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml up -d mysql
 ```
 
-8. 显式初始化 schema：
+9. 显式初始化 schema：
 
 ```bash
 docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml run --rm schema-init
 ```
 
-9. 初始化对象存储 bucket：
+10. 初始化对象存储 bucket：
 
 ```bash
 docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml run --rm init-storage
@@ -164,25 +176,59 @@ docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.y
 
 如果对象存储提供商不允许通过 S3 API 创建 bucket，就在控制台手动创建 `STORAGE_BUCKET_ORIGINALS` 和 `STORAGE_BUCKET_PREVIEWS`。
 
-10. 启动服务：
+11. 启动业务服务：
 
 ```bash
-docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml up -d api worker web
+sh deploy/staging-deploy.sh deploy/releases/staging-current.env
 ```
 
-11. 检查健康状态：
+## 日常更新发布
+
+日常代码更新不再手动编辑 `deploy/.env.staging` 的镜像变量。流程是：
+
+1. 在开发机发布镜像并生成版本单：
+
+```powershell
+$env:DOCKER_CONFIG="$PWD\.docker-config"
+docker login --username=wlgq987 crpi-niameksqgqq8nnw0.cn-hangzhou.personal.cr.aliyuncs.com
+
+$env:ACR_REGISTRY="crpi-niameksqgqq8nnw0.cn-hangzhou.personal.cr.aliyuncs.com"
+$env:ACR_NAMESPACE="memotree"
+$env:IMAGE_TAG=(git rev-parse --short=12 HEAD)
+node tools/publish-acr-images.mjs
+```
+
+2. 把版本单复制到服务器：
+
+```powershell
+scp deploy/releases/staging-current.env root@120.26.28.65:/root/repos/memotree/deploy/releases/staging-current.env
+```
+
+3. 在服务器执行日常部署：
 
 ```bash
-docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml ps
-curl -fsS http://127.0.0.1/healthz
-curl -fsS http://127.0.0.1/api/healthz
+cd /root/repos/memotree
+git pull
+sh deploy/staging-deploy.sh deploy/releases/staging-current.env
 ```
+
+`staging-deploy.sh` 会：
+
+- 检查 `deploy/.env.staging` 和 release env 文件是否存在。
+- 读取 `API_IMAGE`、`WORKER_IMAGE`、`WEB_IMAGE`。
+- 校验 Docker Compose 配置。
+- 拉取 API、Worker、Web 镜像。
+- 使用 `--no-build` 重启 API、Worker、Web。
+- 检查 `http://127.0.0.1/healthz` 和 `http://127.0.0.1/api/healthz`。
+
+它不会自动运行 `schema-init` 或 `init-storage`。这两个命令只在首次部署或明确需要迁移/初始化时手动执行。
 
 ## 权限边界
 
 - `schema-init` 使用 MySQL root 密码，只用于建表。
 - `init-storage` 需要能创建或确认 bucket。
 - API/Worker 长期凭据只需要访问已有 bucket、生成签名 URL、读取/写入/删除业务对象。
+- release env 只保存镜像版本，不保存长期密钥。
 
 不要把 MySQL 暴露到公网。API、Worker 和 MySQL 应通过 Docker 网络通信。
 
@@ -203,6 +249,26 @@ curl -fsS http://127.0.0.1/api/healthz
 
 ## 日志
 
+查看最近日志：
+
+```bash
+sh deploy/staging-logs.sh --tail=120
+```
+
+持续跟随日志：
+
+```bash
+sh deploy/staging-logs.sh --follow
+```
+
+只看部分服务：
+
+```bash
+sh deploy/staging-logs.sh --tail=200 api worker
+```
+
+也可以直接使用 Docker Compose：
+
 ```bash
 docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml logs -f api
 docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml logs -f worker
@@ -214,16 +280,15 @@ docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.y
 
 ## 回滚
 
-回滚以镜像 tag 和 Git 版本为准：
+回滚以旧 release env 文件和 ACR 镜像 tag 为准：
 
-1. 记录当前可用的 `API_IMAGE`、`WORKER_IMAGE`、`WEB_IMAGE`。
+1. 发布新版本前保留旧的 release env 文件。
 2. 新版本部署前不要删除旧 ACR 镜像 tag。
-3. 如果新版本异常，把 `deploy/.env.staging` 中三张业务镜像改回旧 tag。
+3. 如果新版本异常，把旧 release env 文件复制回服务器。
 4. 执行：
 
 ```bash
-docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml pull api worker web init-storage
-docker compose --env-file deploy/.env.staging -f deploy/docker-compose.staging.yml up -d api worker web
+sh deploy/staging-deploy.sh deploy/releases/previous-release.env
 ```
 
 数据库回滚不能依赖代码回滚。上线前必须先做 `mysqldump --single-transaction`，并把备份上传到 R2 或 NAS。

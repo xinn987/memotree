@@ -35,6 +35,19 @@ const sections = [
     ],
   },
   {
+    title: "日常部署",
+    commands: [
+      ["node tools/publish-acr-images.mjs", "本地：构建并推送 API/Worker/Web 镜像，生成 deploy/releases/staging-current.env"],
+      [
+        "scp deploy/releases/staging-current.env root@120.26.28.65:/root/repos/memotree/deploy/releases/staging-current.env",
+        "本地：把 release env 传到 staging 服务器",
+      ],
+      ["cd /root/repos/memotree", "服务器：进入项目目录"],
+      ["git pull", "服务器：拉取最新代码和部署脚本"],
+      ["sh deploy/staging-deploy.sh deploy/releases/staging-current.env", "服务器：按 release env 拉镜像、重启服务并健康检查"],
+    ],
+  },
+  {
     title: "单脚本帮助",
     commands: [
       ["node tools/dev.mjs --help", "查看一键开发脚本参数"],
@@ -48,15 +61,22 @@ const sections = [
   },
 ];
 
-const commandWidth = Math.max(
-  ...sections.flatMap((section) => section.commands.map(([command]) => command.length)),
+// 长命令单独换行展示，避免一条 scp 命令把所有分组的对齐宽度撑得很散。
+const commandWidth = Math.min(
+  42,
+  Math.max(...sections.flatMap((section) => section.commands.map(([command]) => command.length))),
 );
 
 console.log("MemoTree tools\n");
 for (const section of sections) {
   console.log(section.title);
   for (const [command, description] of section.commands) {
-    console.log(`  ${command.padEnd(commandWidth)}  ${description}`);
+    if (command.length > commandWidth) {
+      console.log(`  ${command}`);
+      console.log(`  ${"".padEnd(commandWidth)}  ${description}`);
+    } else {
+      console.log(`  ${command.padEnd(commandWidth)}  ${description}`);
+    }
   }
   console.log("");
 }
