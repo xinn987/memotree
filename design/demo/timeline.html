@@ -54,13 +54,102 @@
     .fab-upload:hover { background: var(--accent-press); transform: translateY(-2px); }
     .fab-upload svg { width: 18px; height: 18px; }
 
+    /* === 移动端筛选条：默认隐藏，窄屏显示 === */
+    .mobile-filter-bar { display: none; }
+
+    .app-bar__family-toggle {
+      display: none;
+      align-items: center;
+      gap: var(--space-1);
+      background: none;
+      border: 0;
+      font-family: var(--font-display);
+      font-size: var(--text-md);
+      font-weight: 500;
+      color: var(--ink);
+      cursor: pointer;
+      padding: var(--space-1) var(--space-2);
+      border-radius: var(--radius-sm);
+    }
+    .app-bar__family-toggle:hover { background: var(--paper-recess); }
+
     @media (max-width: 720px) {
+      /* 顶栏压缩到 44px：去掉品牌字和切换按钮，家庭名变成可点的切换入口 */
+      .app-bar { height: 44px; padding: 0 var(--space-3); }
+      .app-bar__brand { display: none; }
+      .app-bar__family { display: none; }
+      .app-bar__switch { display: none; }
+      .app-bar__family-toggle { display: inline-flex; }
+      .app-bar .avatar { width: 30px; height: 30px; font-size: 11px; }
+
+      /* hero 散文式 greeting 隐藏，让照片顶上来 */
+      .timeline-hero { display: none; }
+      /* PC 双行 toolbar 隐藏 */
+      .toolbar { display: none; }
+
+      /* 移动筛选条：sticky 一行，月份横滑 + 筛选 icon */
+      .mobile-filter-bar {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        position: sticky;
+        top: 44px;
+        z-index: var(--z-sticky);
+        padding: var(--space-2) var(--space-3);
+        background: oklch(0.965 0.008 60 / 0.92);
+        backdrop-filter: blur(8px);
+        border-bottom: 1px solid var(--hairline);
+      }
+      .mobile-filter-bar__months {
+        display: flex;
+        gap: var(--space-1);
+        overflow-x: auto;
+        flex: 1;
+        scrollbar-width: none;
+      }
+      .mobile-filter-bar__months::-webkit-scrollbar { display: none; }
+      .m-month {
+        flex: 0 0 auto;
+        height: 30px;
+        padding: 0 var(--space-3);
+        border: 0;
+        border-radius: var(--radius-pill);
+        background: transparent;
+        color: var(--ink-soft);
+        font-size: var(--text-xs);
+        font-weight: 600;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .m-month.is-active { background: var(--accent); color: var(--paper-raised); }
+      .m-filter-btn {
+        position: relative;
+        flex: 0 0 auto;
+        width: 36px; height: 36px;
+        display: grid; place-items: center;
+        border: 1px solid var(--hairline-ink);
+        border-radius: var(--radius-md);
+        background: var(--paper-raised);
+        color: var(--ink-soft);
+        cursor: pointer;
+      }
+      .m-filter-btn__dot {
+        position: absolute;
+        top: 7px; right: 8px;
+        width: 6px; height: 6px;
+        border-radius: 50%;
+        background: var(--accent);
+        display: none; /* 有筛选条件时显示 */
+      }
+
+      /* 月份大标题移动端更紧凑 */
+      .month { margin: var(--space-5) 0 var(--space-4); }
+      .month:first-child { margin-top: var(--space-3); }
+      .month__note { font-size: var(--text-sm); }
+
+      /* FAB 圆形纯 icon */
       .fab-upload { right: var(--space-4); bottom: var(--space-16); width: 52px; height: 52px; padding: 0; border-radius: var(--radius-pill); justify-content: center; }
       .fab-upload__label { display: none; }
-      /* 窄屏顶栏简化：只留品牌字 + 头像，家庭信息/切换按钮下移到 hero 区已展示 */
-      .app-bar__family { display: none; }
-      .app-bar .btn--icon { display: none; }
-      .app-bar { padding: 0 var(--space-4); }
     }
   </style>
 </head>
@@ -69,13 +158,12 @@
   <!-- ============ App bar ============ -->
   <header class="app-bar">
     <div class="app-bar__brand">Memo<em>Tree</em></div>
-    <div class="app-bar__family">
+    <button class="app-bar__family-toggle" aria-label="切换家庭">
       <span>小满的家</span>
-      <span class="faint">·</span>
-      <span class="faint">4 位家人</span>
-    </div>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
     <div class="app-bar__actions">
-      <button class="btn btn--icon btn--ghost" aria-label="切换家庭" title="切换家庭">
+      <button class="btn btn--icon btn--ghost app-bar__switch" aria-label="切换家庭" title="切换家庭">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l9-9 9 9"/><path d="M5 10v10a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v4a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V10"/></svg>
       </button>
       <div class="avatar" style="width:36px;height:36px;border-radius:50%;background:var(--accent-tint);color:var(--accent-ink);display:grid;place-items:center;font-weight:600;font-size:13px;">妈</div>
@@ -84,14 +172,14 @@
 
   <main class="container--gallery">
 
-    <!-- ============ Hero greeting ============ -->
+    <!-- ============ Hero greeting（PC 保留散文，移动端压成一行月份导航）============ -->
     <section class="timeline-hero">
       <p class="eyebrow-brand">2026 年 · 六月</p>
       <h1 class="timeline-hero__greeting">小满最近<em>挺好的</em></h1>
       <p class="timeline-hero__sub">这是这周家里人拍下的瞬间。慢慢看。</p>
     </section>
 
-    <!-- ============ Toolbar ============ -->
+    <!-- ============ Toolbar（PC 双行 segmented，移动端收成筛选 icon）============ -->
     <div class="toolbar">
       <div class="toolbar__group" role="tablist" aria-label="媒体类型">
         <button class="seg is-active" role="tab" aria-selected="true">全部</button>
@@ -105,6 +193,20 @@
         <button class="seg" role="tab">四月</button>
         <button class="seg" role="tab">更早</button>
       </div>
+    </div>
+
+    <!-- ============ 移动端筛选条：sticky 一行，月份切换 + 筛选 icon ============ -->
+    <div class="mobile-filter-bar" role="toolbar" aria-label="筛选">
+      <div class="mobile-filter-bar__months" role="tablist">
+        <button class="m-month is-active" role="tab">六月</button>
+        <button class="m-month" role="tab">五月</button>
+        <button class="m-month" role="tab">四月</button>
+        <button class="m-month" role="tab">更早</button>
+      </div>
+      <button class="m-filter-btn" aria-label="筛选" aria-haspopup="true">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z"/></svg>
+        <span class="m-filter-btn__dot" aria-hidden="true"></span>
+      </button>
     </div>
 
     <!-- ============ Month: 六月 ============ -->
@@ -252,7 +354,16 @@
 
   </main>
 
-  <!-- ============ Upload FAB ============ -->
+  <!-- demo 页脚链接（移动端用，替代 fixed demo-nav，不挡操作） -->
+  <nav class="demo-foot" aria-label="demo 页面切换">
+    <a href="timeline.html" class="is-current">时间线</a>
+    <a href="media-detail.html">详情</a>
+    <a href="upload.html">上传</a>
+    <a href="invite.html">邀请</a>
+    <a href="members.html">成员</a>
+    <a href="auth.html">登录</a>
+    <a href="join.html">加入</a>
+  </nav>
   <a href="upload.html" class="fab-upload" aria-label="上传新的照片">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
     <span class="fab-upload__label">上传新的</span>

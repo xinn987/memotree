@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>家庭成员 · MemoTree</title>
+  <link rel="stylesheet" href="assets/demo.css" />
+  <style>
+    /* 成员管理页 —— admin 功能。每个成员一行，可改称呼/转让 admin/移除。
+       移动端优先：操作收进每行的"更多"按钮，避免一屏全是按钮。*/
+
+    .members-hero {
+      padding: var(--space-10) 0 var(--space-6);
+    }
+    .members-hero h1 {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: var(--text-2xl);
+      letter-spacing: var(--tracking-display);
+      margin: var(--space-2) 0 0;
+      color: var(--ink);
+    }
+    .members-hero p {
+      color: var(--ink-soft);
+      margin: var(--space-2) 0 0;
+      max-width: 50ch;
+    }
+
+    .members-list {
+      display: grid;
+      gap: var(--space-2);
+      max-width: 640px;
+    }
+    .member-item {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      padding: var(--space-4);
+      border-radius: var(--radius-md);
+      background: var(--paper-raised);
+      border: 1px solid var(--hairline);
+    }
+    .member-item__avatar {
+      width: 44px; height: 44px; border-radius: 50%;
+      display: grid; place-items: center;
+      font-weight: 600; font-size: 15px;
+      flex: 0 0 auto;
+    }
+    .member-item__main { flex: 1; min-width: 0; }
+    .member-item__name {
+      font-weight: 500;
+      color: var(--ink);
+      font-size: var(--text-base);
+    }
+    .member-item__name .you-tag {
+      display: inline-block;
+      margin-left: var(--space-2);
+      padding: 1px var(--space-2);
+      border-radius: var(--radius-sm);
+      background: var(--paper-recess);
+      color: var(--ink-faint);
+      font-size: var(--text-2xs);
+      font-weight: 500;
+    }
+    .member-item__role {
+      font-size: var(--text-xs);
+      color: var(--ink-faint);
+    }
+    .member-item__role.is-admin { color: var(--accent); font-weight: 600; }
+
+    /* 操作区：PC 直接显示，移动端收进"更多" */
+    .member-item__actions {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      flex: 0 0 auto;
+    }
+    .member-item__actions .btn {
+      height: 32px;
+      font-size: var(--text-xs);
+      padding: 0 var(--space-3);
+    }
+    .member-item__actions .btn--rename { color: var(--ink-soft); border-color: var(--hairline-ink); }
+    .member-item__actions .btn--transfer { color: var(--accent); border-color: oklch(0.78 0.10 38 / 0.4); }
+    .member-item__actions .btn--remove { color: var(--state-err); border-color: oklch(0.78 0.060 28); }
+    .member-item__actions .btn--remove:hover { background: oklch(0.95 0.025 28); }
+
+    /* 自己那行：操作禁用，只显示"这是你" */
+    .member-item.is-self .member-item__actions { gap: 0; }
+    .member-item.is-self .btn--rename,
+    .member-item.is-self .btn--transfer,
+    .member-item.is-self .btn--remove { display: none; }
+
+    /* 移动端"更多"按钮 + 弹出菜单 */
+    .member-more { display: none; }
+    .member-more__btn {
+      width: 36px; height: 36px;
+      display: grid; place-items: center;
+      border: 1px solid var(--hairline-ink);
+      border-radius: var(--radius-md);
+      background: var(--paper-raised);
+      color: var(--ink-soft);
+      cursor: pointer;
+    }
+    .member-more__btn:hover { background: var(--paper-recess); }
+    .member-more__menu {
+      display: none;
+      position: absolute;
+      flex-direction: column;
+      gap: var(--space-1);
+      padding: var(--space-2);
+      background: var(--paper-raised);
+      border: 1px solid var(--hairline);
+      border-radius: var(--radius-md);
+      box-shadow: var(--shadow-raised);
+      z-index: var(--z-overlay);
+      min-width: 160px;
+    }
+    .member-more__menu.is-open { display: flex; }
+    .member-more__menu button {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      width: 100%;
+      height: 36px;
+      padding: 0 var(--space-3);
+      border: 0;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--ink);
+      font-size: var(--text-sm);
+      text-align: left;
+      cursor: pointer;
+    }
+    .member-more__menu button:hover { background: var(--paper-recess); }
+    .member-more__menu button.is-danger { color: var(--state-err); }
+
+    /* 移除确认弹窗（复用 media-detail 的 dialog 风格） */
+    .remove-dialog {
+      width: min(90vw, 380px);
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius-lg);
+      background: var(--paper-raised);
+      box-shadow: var(--shadow-raised);
+      color: var(--ink);
+    }
+    .remove-dialog::backdrop { background: oklch(0.15 0.02 40 / 0.5); }
+    .remove-dialog__form { padding: var(--space-6); display: grid; gap: var(--space-4); }
+    .remove-dialog__title {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: var(--text-lg);
+      margin: 0;
+      color: var(--ink);
+    }
+    .remove-dialog__body {
+      margin: 0;
+      font-size: var(--text-sm);
+      color: var(--ink-soft);
+      line-height: var(--leading-snug);
+    }
+    .remove-dialog__actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
+    .btn--danger-solid { background: var(--state-err); color: var(--paper-raised); border: 0; }
+    .btn--danger-solid:hover { background: oklch(0.46 0.15 28); }
+
+    .admin-warn {
+      display: flex;
+      align-items: flex-start;
+      gap: var(--space-3);
+      padding: var(--space-4);
+      margin-top: var(--space-6);
+      background: oklch(0.95 0.025 65);
+      border-radius: var(--radius-md);
+      border-left: 3px solid var(--state-warn);
+      max-width: 640px;
+    }
+    .admin-warn svg { flex: 0 0 auto; margin-top: 2px; color: var(--state-warn); }
+    .admin-warn p { margin: 0; font-size: var(--text-sm); color: var(--ink-soft); line-height: var(--leading-snug); }
+
+    @media (max-width: 720px) {
+      .app-bar { height: 44px; padding: 0 var(--space-3); }
+      .app-bar__brand { font-size: var(--text-base); }
+      .app-bar__family { display: none; }
+      .app-bar .btn { display: none; }
+      .app-bar .avatar { width: 30px; height: 30px; font-size: 11px; }
+
+      .members-hero { padding: var(--space-4) 0 var(--space-3); }
+      .members-hero h1 { font-size: var(--text-xl); }
+      .members-hero p { display: none; }
+
+      /* PC 直接显示的操作按钮隐藏，改用"更多"菜单 */
+      .member-item__actions .btn { display: none; }
+      .member-more { display: block; position: relative; }
+
+      .member-item { padding: var(--space-3); }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="app-bar">
+    <a href="invite.html" class="app-bar__brand" style="text-decoration:none">Memo<em>Tree</em></a>
+    <div class="app-bar__family"><span>小满的家</span> <span class="faint">· 管理员</span></div>
+    <div class="app-bar__actions">
+      <a href="invite.html" class="btn btn--ghost" style="height:36px;font-size:var(--text-xs)">返回邀请页</a>
+      <div class="avatar" style="width:36px;height:36px;border-radius:50%;background:var(--accent-tint);color:var(--accent-ink);display:grid;place-items:center;font-weight:600;font-size:13px;">妈</div>
+    </div>
+  </header>
+
+  <main class="container">
+
+    <section class="members-hero">
+      <span class="eyebrow-brand">家人管理</span>
+      <h1>家里的成员</h1>
+      <p>可以改家人的称呼，把管理员交给别人，或者请某位家人离开。最后一个管理员不能离开。</p>
+    </section>
+
+    <div class="members-list">
+
+      <!-- 自己（管理员） -->
+      <div class="member-item is-self">
+        <div class="member-item__avatar" style="background:var(--accent-tint);color:var(--accent-ink)">妈</div>
+        <div class="member-item__main">
+          <span class="member-item__name">妈妈<span class="you-tag">这是你</span></span>
+          <span class="member-item__role is-admin">管理员</span>
+        </div>
+        <div class="member-item__actions"></div>
+      </div>
+
+      <!-- 普通成员：可改名/转让/移除 -->
+      <div class="member-item">
+        <div class="member-item__avatar" style="background:oklch(0.92 0.03 150);color:oklch(0.40 0.10 150)">爸</div>
+        <div class="member-item__main">
+          <span class="member-item__name">爸爸</span>
+          <span class="member-item__role">家人</span>
+        </div>
+        <div class="member-item__actions">
+          <button class="btn btn--rename">改称呼</button>
+          <button class="btn btn--transfer">设为管理员</button>
+          <button class="btn btn--remove" data-name="爸爸">请离开</button>
+        </div>
+        <div class="member-more">
+          <button class="member-more__btn" aria-label="更多操作" aria-haspopup="menu">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          </button>
+          <div class="member-more__menu" role="menu">
+            <button role="menuitem">改称呼</button>
+            <button role="menuitem">设为管理员</button>
+            <button role="menuitem" class="is-danger" data-name="爸爸">请离开</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="member-item">
+        <div class="member-item__avatar" style="background:oklch(0.93 0.04 65);color:oklch(0.45 0.11 65)">爷</div>
+        <div class="member-item__main">
+          <span class="member-item__name">爷爷</span>
+          <span class="member-item__role">家人</span>
+        </div>
+        <div class="member-item__actions">
+          <button class="btn btn--rename">改称呼</button>
+          <button class="btn btn--transfer">设为管理员</button>
+          <button class="btn btn--remove" data-name="爷爷">请离开</button>
+        </div>
+        <div class="member-more">
+          <button class="member-more__btn" aria-label="更多操作" aria-haspopup="menu">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          </button>
+          <div class="member-more__menu" role="menu">
+            <button role="menuitem">改称呼</button>
+            <button role="menuitem">设为管理员</button>
+            <button role="menuitem" class="is-danger" data-name="爷爷">请离开</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="member-item">
+        <div class="member-item__avatar" style="background:oklch(0.93 0.03 230);color:oklch(0.40 0.08 230)">外</div>
+        <div class="member-item__main">
+          <span class="member-item__name">外婆</span>
+          <span class="member-item__role">家人</span>
+        </div>
+        <div class="member-item__actions">
+          <button class="btn btn--rename">改称呼</button>
+          <button class="btn btn--transfer">设为管理员</button>
+          <button class="btn btn--remove" data-name="外婆">请离开</button>
+        </div>
+        <div class="member-more">
+          <button class="member-more__btn" aria-label="更多操作" aria-haspopup="menu">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+          </button>
+          <div class="member-more__menu" role="menu">
+            <button role="menuitem">改称呼</button>
+            <button role="menuitem">设为管理员</button>
+            <button role="menuitem" class="is-danger" data-name="外婆">请离开</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="admin-warn">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+      <p>把管理员交给别人后，你就变成普通家人了，不能再管理成员和邀请。家里至少要留一个管理员。</p>
+    </div>
+
+    <div style="height:var(--space-16)"></div>
+
+  </main>
+
+  <!-- demo 页脚链接（移动端用，替代 fixed demo-nav，不挡操作） -->
+  <nav class="demo-foot" aria-label="demo 页面切换">
+    <a href="timeline.html">时间线</a>
+    <a href="media-detail.html">详情</a>
+    <a href="upload.html">上传</a>
+    <a href="invite.html">邀请</a>
+    <a href="members.html" class="is-current">成员</a>
+    <a href="auth.html">登录</a>
+    <a href="join.html">加入</a>
+  </nav>
+
+  <!-- 移除确认弹窗 -->
+  <dialog class="remove-dialog" id="remove-dialog">
+    <form method="dialog" class="remove-dialog__form">
+      <h3 class="remove-dialog__title" id="remove-title">请这位家人离开？</h3>
+      <p class="remove-dialog__body">ta 会立刻看不到家里的照片，但 ta 之前上传的照片会保留。以后想再让 ta 加入，需要重新发邀请。</p>
+      <div class="remove-dialog__actions">
+        <button class="btn btn--ghost" value="cancel">再想想</button>
+        <button class="btn btn--danger-solid" value="remove">确认</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    // 移除确认流
+    (function () {
+      var dlg = document.getElementById('remove-dialog');
+      var title = document.getElementById('remove-title');
+      if (!dlg) return;
+      document.querySelectorAll('[data-name]').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          title.textContent = '请 ' + btn.dataset.name + ' 离开？';
+          dlg.showModal();
+        });
+      });
+    })();
+
+    // 移动端"更多"菜单：点击切换
+    (function () {
+      document.querySelectorAll('.member-more__btn').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          var menu = btn.nextElementSibling;
+          var open = menu.classList.contains('is-open');
+          // 先关所有
+          document.querySelectorAll('.member-more__menu.is-open').forEach(function (m) { m.classList.remove('is-open'); });
+          if (!open) menu.classList.add('is-open');
+        });
+      });
+      document.addEventListener('click', function () {
+        document.querySelectorAll('.member-more__menu.is-open').forEach(function (m) { m.classList.remove('is-open'); });
+      });
+    })();
+  </script>
+
+  <nav class="demo-nav" aria-label="demo 页面切换">
+    <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>
+    <a href="media-detail.html" aria-label="详情"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg><span class="demo-nav__label">详情</span></a>
+    <a href="upload.html" aria-label="上传"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg><span class="demo-nav__label">上传</span></a>
+    <a href="invite.html" aria-label="邀请"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3-3-3 3"/><path d="M19 8v8"/></svg><span class="demo-nav__label">邀请</span></a>
+  </nav>
+
+</body>
+</html>

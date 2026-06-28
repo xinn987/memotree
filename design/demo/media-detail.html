@@ -210,6 +210,106 @@
       /* 移动端：元信息默认折叠，点 summary 展开 */
       .meta-details { margin-top: var(--space-4); }
     }
+
+    /* 顶栏"更多操作"按钮 */
+    .detail-bar__more {
+      display: grid;
+      place-items: center;
+      width: 36px; height: 36px;
+      border: 0;
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: oklch(0.85 0.008 60);
+      cursor: pointer;
+    }
+    .detail-bar__more:hover { background: oklch(0.30 0.010 45); color: oklch(0.95 0.01 60); }
+
+    /* 删除按钮（admin 限，弱化但可见） */
+    .meta-actions__delete {
+      color: var(--state-err) !important;
+      border-color: oklch(0.50 0.08 28 / 0.4) !important;
+    }
+    .btn--danger-solid {
+      background: var(--state-err);
+      color: var(--paper-raised);
+      border: 0;
+    }
+    .btn--danger-solid:hover { background: oklch(0.46 0.15 28); }
+
+    /* 删除确认弹窗 */
+    .delete-dialog {
+      width: min(90vw, 380px);
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius-lg);
+      background: var(--paper-raised);
+      box-shadow: var(--shadow-raised);
+      color: var(--ink);
+    }
+    .delete-dialog::backdrop { background: oklch(0.15 0.02 40 / 0.5); }
+    .delete-dialog__form { padding: var(--space-6); display: grid; gap: var(--space-4); }
+    .delete-dialog__title {
+      font-family: var(--font-display);
+      font-weight: 500;
+      font-size: var(--text-lg);
+      margin: 0;
+      color: var(--ink);
+    }
+    .delete-dialog__body {
+      margin: 0;
+      font-size: var(--text-sm);
+      color: var(--ink-soft);
+      line-height: var(--leading-snug);
+    }
+    .delete-dialog__actions { display: flex; gap: var(--space-2); justify-content: flex-end; }
+
+    /* 移动端底部导航条（拇指可达） */
+    .m-detail-nav {
+      display: none;
+      position: fixed;
+      left: 0; right: 0;
+      bottom: 0;
+      z-index: var(--z-overlay);
+      background: oklch(0.205 0.012 45 / 0.92);
+      backdrop-filter: blur(12px);
+      border-top: 1px solid oklch(0.30 0.010 45);
+      padding: var(--space-2) var(--space-3) calc(var(--space-2) + env(safe-area-inset-bottom));
+    }
+    .m-detail-nav__btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-2);
+      flex: 1;
+      height: 44px;
+      border: 0;
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: oklch(0.90 0.01 60);
+      font-size: var(--text-sm);
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .m-detail-nav__btn:hover { background: oklch(0.26 0.010 45); }
+
+    @media (max-width: 880px) {
+      /* 顶栏压缩 */
+      .detail-bar { height: 44px; padding: 0 var(--space-3); }
+      .detail-bar__back-label { display: none; } /* 只留返回箭头 */
+      .detail-bar__counter { font-size: var(--text-sm); }
+
+      /* 中部左右箭头隐藏，改用底部导航条 */
+      .nav-arrow { display: none; }
+
+      /* 底部导航条显示 */
+      .m-detail-nav { display: flex; }
+
+      /* viewer 高度让出底部导航 */
+      .viewer img, .viewer video { max-height: 70vh; }
+
+      /* 主区域底部留白 */
+      .detail-stage { padding-bottom: 80px; }
+    }
   </style>
 </head>
 <body class="detail">
@@ -217,12 +317,14 @@
   <header class="detail-bar">
     <a href="timeline.html" class="detail-bar__back">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
-      回到六月
+      <span class="detail-bar__back-label">回到六月</span>
     </a>
     <div class="detail-bar__counter">
       <em>1</em> <span class="faint">/ 23</span>
     </div>
-    <div style="width:96px"></div>
+    <button class="detail-bar__more" aria-label="更多操作" aria-haspopup="menu">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+    </button>
   </header>
 
   <main class="detail-stage">
@@ -273,13 +375,65 @@
 
         <div class="meta-actions">
           <button class="btn">收藏</button>
-          <button class="btn">下载原图</button>
+          <button class="btn">收藏</button>
           <button class="btn">改拍摄时间</button>
+          <button class="btn meta-actions__delete" id="open-delete">删除这张</button>
         </div>
       </details>
     </aside>
 
   </main>
+
+  <!-- demo 页脚链接（移动端用，替代 fixed demo-nav，不挡操作） -->
+  <nav class="demo-foot" aria-label="demo 页面切换">
+    <a href="timeline.html">时间线</a>
+    <a href="media-detail.html" class="is-current">详情</a>
+    <a href="upload.html">上传</a>
+    <a href="invite.html">邀请</a>
+    <a href="members.html">成员</a>
+    <a href="auth.html">登录</a>
+    <a href="join.html">加入</a>
+  </nav>
+
+  <!-- 移动端底部导航条：上一张 / 下一张（拇指可达） -->
+  <nav class="m-detail-nav" aria-label="切换照片">
+    <button class="m-detail-nav__btn" aria-label="上一张">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+      上一张
+    </button>
+    <button class="m-detail-nav__btn" aria-label="下一张">
+      下一张
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
+    </button>
+  </nav>
+
+  <!-- 删除确认弹窗（admin 限，防误删） -->
+  <dialog class="delete-dialog" id="delete-dialog">
+    <form method="dialog" class="delete-dialog__form">
+      <h3 class="delete-dialog__title">删掉这张照片？</h3>
+      <p class="delete-dialog__body">删掉后家里人就看不到了。原文件会保留一段时间再清理，但这个操作不能撤销。</p>
+      <div class="delete-dialog__actions">
+        <button class="btn btn--ghost" value="cancel">再想想</button>
+        <button class="btn btn--danger-solid" value="delete">确认删除</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    // 删除确认流：点"删除这张"打开 dialog，确认后执行（demo 只关闭）
+    (function () {
+      var open = document.getElementById('open-delete');
+      var dlg = document.getElementById('delete-dialog');
+      if (!open || !dlg) return;
+      open.addEventListener('click', function () { dlg.showModal(); });
+      dlg.addEventListener('close', function () {
+        if (dlg.returnValue === 'delete') {
+          // 真实场景调 DELETE /families/{id}/media/{id}，成功后返回时间线
+          console.log('delete confirmed');
+        }
+      });
+    })();
+  </script>
 
   <nav class="demo-nav" aria-label="demo 页面切换">
     <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>

@@ -169,9 +169,64 @@
       color: var(--state-err);
     }
     .invite-row .btn--danger:hover { background: oklch(0.95 0.025 28); }
-    @media (max-width: 540px) {
-      .invite-row { flex-direction: column; align-items: stretch; gap: var(--space-2); }
+
+    /* 已结束的邀请折叠容器（移动端默认收起，减少滚动） */
+    .invite-resolved-group { display: contents; }
+    .invite-resolved-toggle { display: none; }
+
+    @media (max-width: 720px) {
+      /* 顶栏压缩 */
+      .app-bar { height: 44px; padding: 0 var(--space-3); }
+      .app-bar__brand { font-size: var(--text-base); }
+      .app-bar__family { display: none; }
+      .app-bar__actions .btn { display: none; } /* "回到时间线"按钮隐藏，用顶栏品牌字返回 */
+      .app-bar .avatar { width: 30px; height: 30px; font-size: 11px; }
+
+      /* hero 压缩：去掉副文案 */
+      .invite-hero { padding: var(--space-4) 0 var(--space-3); }
+      .invite-hero h1 { font-size: var(--text-xl); }
+      .invite-hero p { display: none; }
+
+      /* 生成结果框更突出（移动端这是核心反馈） */
+      .gen-result { padding: var(--space-4); }
+      .gen-result__url { flex-wrap: wrap; }
+      .gen-result__url .btn { flex: 1; }
+
+      /* 邀请行紧凑 */
+      .invite-row { flex-direction: column; align-items: stretch; gap: var(--space-2); padding: var(--space-3); }
       .invite-row__actions { justify-content: flex-end; }
+
+      /* 已结束的邀请默认折叠，点 toggle 展开 */
+      .invite-resolved-group {
+        display: grid;
+        grid-template-rows: 0fr;
+        transition: grid-template-rows var(--dur-base) var(--ease-out);
+        overflow: hidden;
+      }
+      .invite-resolved-group > div { min-height: 0; }
+      .invite-resolved-toggle {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: var(--space-2);
+        width: 100%;
+        height: 40px;
+        margin-top: var(--space-2);
+        border: 1px solid var(--hairline);
+        border-radius: var(--radius-md);
+        background: var(--paper-raised);
+        color: var(--ink-soft);
+        font-size: var(--text-sm);
+        font-weight: 500;
+        cursor: pointer;
+      }
+      .invite-resolved-toggle:hover { background: var(--paper-recess); }
+      .invite-resolved-toggle[aria-expanded="true"] ~ .invite-resolved-group {
+        grid-template-rows: 1fr;
+      }
+
+      /* 成员网格单列 */
+      .member-grid { grid-template-columns: 1fr; }
     }
 
     /* === 动作单元 3：家里的成员 ===
@@ -287,34 +342,42 @@
           </div>
         </div>
 
-        <!-- 已结束：降权，只读 -->
-        <div class="invite-row is-resolved">
-          <div class="invite-row__main">
-            <span class="invite-row__name">爷爷</span>
-            <span class="invite-row__meta">6 月 18 日生成 · 已使用</span>
-          </div>
-          <div class="invite-row__actions">
-            <span class="chip chip--ok">已加入</span>
-          </div>
-        </div>
+        <!-- 已结束：移动端折叠，PC 始终展开 -->
+        <button class="invite-resolved-toggle" aria-expanded="false" aria-controls="resolved-invites">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          看已结束的 3 条
+        </button>
+        <div class="invite-resolved-group" id="resolved-invites">
+          <div>
+            <div class="invite-row is-resolved">
+              <div class="invite-row__main">
+                <span class="invite-row__name">爷爷</span>
+                <span class="invite-row__meta">6 月 18 日生成 · 已使用</span>
+              </div>
+              <div class="invite-row__actions">
+                <span class="chip chip--ok">已加入</span>
+              </div>
+            </div>
 
-        <div class="invite-row is-resolved">
-          <div class="invite-row__main">
-            <span class="invite-row__name">舅舅</span>
-            <span class="invite-row__meta">6 月 10 日生成 · 已作废</span>
-          </div>
-          <div class="invite-row__actions">
-            <span class="chip">已作废</span>
-          </div>
-        </div>
+            <div class="invite-row is-resolved">
+              <div class="invite-row__main">
+                <span class="invite-row__name">舅舅</span>
+                <span class="invite-row__meta">6 月 10 日生成 · 已作废</span>
+              </div>
+              <div class="invite-row__actions">
+                <span class="chip">已作废</span>
+              </div>
+            </div>
 
-        <div class="invite-row is-resolved">
-          <div class="invite-row__main">
-            <span class="invite-row__name">小姨</span>
-            <span class="invite-row__meta">6 月 1 日生成 · 已过期</span>
-          </div>
-          <div class="invite-row__actions">
-            <span class="chip">已过期</span>
+            <div class="invite-row is-resolved">
+              <div class="invite-row__main">
+                <span class="invite-row__name">小姨</span>
+                <span class="invite-row__meta">6 月 1 日生成 · 已过期</span>
+              </div>
+              <div class="invite-row__actions">
+                <span class="chip">已过期</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -324,7 +387,7 @@
     <section class="action-block">
       <div class="action-block__head">
         <h2 class="action-block__title">家里的成员</h2>
-        <span class="action-block__hint">4 人</span>
+        <span class="action-block__hint">4 人 · <a href="members.html" style="color:var(--accent);text-decoration:none">管理</a></span>
       </div>
 
       <div class="member-grid">
@@ -362,6 +425,31 @@
     <div style="height:var(--space-16)"></div>
 
   </main>
+
+  <!-- demo 页脚链接（移动端用，替代 fixed demo-nav，不挡操作） -->
+  <nav class="demo-foot" aria-label="demo 页面切换">
+    <a href="timeline.html">时间线</a>
+    <a href="media-detail.html">详情</a>
+    <a href="upload.html">上传</a>
+    <a href="invite.html" class="is-current">邀请</a>
+    <a href="members.html">成员</a>
+    <a href="auth.html">登录</a>
+    <a href="join.html">加入</a>
+  </nav>
+
+  <script>
+    // 已结束邀请折叠：移动端默认收起，点 toggle 展开
+    (function () {
+      var t = document.querySelector('.invite-resolved-toggle');
+      if (!t) return;
+      t.addEventListener('click', function () {
+        var open = t.getAttribute('aria-expanded') === 'true';
+        t.setAttribute('aria-expanded', String(!open));
+        t.querySelector('svg').style.transform = open ? '' : 'rotate(180deg)';
+        t.lastChild.textContent = open ? '看已结束的 3 条' : '收起';
+      });
+    })();
+  </script>
 
   <nav class="demo-nav" aria-label="demo 页面切换">
     <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>

@@ -15,8 +15,8 @@
     }
     @media (max-width: 880px) {
       /* 移动端：情绪板不隐藏，改成顶部 banner，保留品牌入口的温度 */
-      .auth { grid-template-columns: 1fr; grid-template-rows: 32vh 1fr; }
-      .auth__aside { min-height: 32vh; }
+      .auth { grid-template-columns: 1fr; grid-template-rows: 25vh 1fr; }
+      .auth__aside { min-height: 25vh; }
       .auth__brand {
         left: var(--space-6);
         bottom: var(--space-5);
@@ -205,6 +205,17 @@
     </main>
 
   </div>
+
+  <!-- demo 页脚链接（移动端用，替代 fixed demo-nav，不挡操作） -->
+  <nav class="demo-foot" aria-label="demo 页面切换">
+    <a href="timeline.html">时间线</a>
+    <a href="media-detail.html">详情</a>
+    <a href="upload.html">上传</a>
+    <a href="invite.html">邀请</a>
+    <a href="members.html">成员</a>
+    <a href="auth.html" class="is-current">登录</a>
+    <a href="join.html">加入</a>
+  </nav>
 
   <nav class="demo-nav" aria-label="demo 页面切换">
     <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>

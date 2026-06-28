@@ -14,8 +14,8 @@
       min-height: 100vh;
     }
     @media (max-width: 880px) {
-      .join { grid-template-columns: 1fr; grid-template-rows: 32vh 1fr; }
-      .join__aside { min-height: 32vh; }
+      .join { grid-template-columns: 1fr; grid-template-rows: 25vh 1fr; }
+      .join__aside { min-height: 25vh; }
       .join__brand { left: var(--space-6); bottom: var(--space-5); }
       .join__brand h1 { font-size: clamp(34px, 9vw, 48px); }
       .join__brand p { font-size: var(--text-base); }
@@ -209,6 +209,17 @@
     </main>
 
   </div>
+
+  <!-- demo 页脚链接（移动端用，替代 fixed demo-nav，不挡操作） -->
+  <nav class="demo-foot" aria-label="demo 页面切换">
+    <a href="timeline.html">时间线</a>
+    <a href="media-detail.html">详情</a>
+    <a href="upload.html">上传</a>
+    <a href="invite.html">邀请</a>
+    <a href="members.html">成员</a>
+    <a href="auth.html">登录</a>
+    <a href="join.html" class="is-current">加入</a>
+  </nav>
 
   <nav class="demo-nav" aria-label="demo 页面切换">
     <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>

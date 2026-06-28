@@ -117,29 +117,41 @@
       color: var(--ink-faint);
     }
 
-    /* 文件行 */
-    .file-list { display: grid; gap: var(--space-3); }
+    /* 文件行 · 重设计：缩略图 + 右侧两行（信息行/进度行），紧凑不换行 */
+    .file-list { display: grid; gap: var(--space-2); }
     .file-row {
       display: grid;
-      grid-template-columns: 48px minmax(0, 1fr) auto;
+      grid-template-columns: 44px minmax(0, 1fr);
       align-items: center;
-      gap: var(--space-3);
+      gap: 0 var(--space-3);
       padding: var(--space-3);
       border-radius: var(--radius-md);
       background: var(--paper);
     }
     .file-row__thumb {
-      width: 48px; height: 48px;
+      width: 44px; height: 44px;
       border-radius: var(--radius-sm);
       object-fit: cover;
       background: var(--paper-recess);
+      grid-row: 1 / span 2;
     }
+    .file-row__info { grid-column: 2; grid-row: 1; }
+    .progress { grid-column: 2; grid-row: 2; }
+    .file-row__err-hint { grid-column: 2; grid-row: 3; margin-top: var(--space-1); }
     .file-row__main { min-width: 0; display: grid; gap: var(--space-2); }
+    /* 信息行：文件名 · 大小 左侧，状态 chip 右侧，同行 */
+    .file-row__info {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      min-width: 0;
+    }
     .file-row__name {
       display: flex;
       align-items: baseline;
       gap: var(--space-2);
       min-width: 0;
+      flex: 1;
     }
     .file-row__name strong {
       font-weight: 500;
@@ -152,6 +164,12 @@
     .file-row__name span {
       font-size: var(--text-xs);
       color: var(--ink-faint);
+      flex: 0 0 auto;
+    }
+    .file-row__status {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
       flex: 0 0 auto;
     }
     .progress {
@@ -169,11 +187,6 @@
     .progress__bar.is-processing { background: var(--caramel); }
     .progress__bar.is-failed { background: var(--state-err); }
     .progress__bar.is-done { background: var(--state-ok); }
-    .file-row__status {
-      display: flex;
-      align-items: center;
-      gap: var(--space-2);
-    }
 
     /* 底部操作 */
     .task__foot {
@@ -220,27 +233,76 @@
     }
     .recent__row span { font-size: var(--text-xs); color: var(--ink-faint); }
 
+    /* 失败原因提示：上传失败 vs 处理失败区分 */
+    .file-row__err-hint {
+      font-size: var(--text-xs);
+      color: var(--state-err);
+      line-height: var(--leading-snug);
+    }
+
+    /* 移动端底部固定选片按钮（替代 PC 大拖放区） */
+    .mobile-upload-fab {
+      display: none;
+      position: fixed;
+      left: var(--space-4);
+      right: var(--space-4);
+      bottom: var(--space-4);
+      z-index: var(--z-overlay);
+      height: 50px;
+      border-radius: var(--radius-pill);
+      background: var(--accent);
+      color: var(--paper-raised);
+      border: 0;
+      font-weight: 600;
+      font-size: var(--text-base);
+      box-shadow: var(--shadow-raised);
+      cursor: pointer;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-2);
+    }
+    .mobile-upload-fab:hover { background: var(--accent-press); }
+    .mobile-upload-fab svg { width: 20px; height: 20px; }
+    .mobile-upload-fab input { display: none; }
+
     @media (max-width: 720px) {
-      /* 窄屏顶栏简化 */
+      /* 顶栏压缩到 44px */
+      .app-bar { height: 44px; padding: 0 var(--space-3); }
+      .app-bar__brand { font-size: var(--text-base); }
       .app-bar__family { display: none; }
-      .app-bar { padding: 0 var(--space-4); }
-      /* 任务头在窄屏换行，统计占满一行 */
+      .app-bar .avatar { width: 30px; height: 30px; font-size: 11px; }
+
+      /* hero 压缩：只留标题，去掉副文案 */
+      .upload-hero { padding: var(--space-4) 0 var(--space-3); }
+      .upload-hero h1 { font-size: var(--text-xl); }
+      .upload-hero p { display: none; }
+
+      /* 大拖放区隐藏（手机不拖拽），改用底部固定 FAB */
+      .dropzone { display: none; }
+      .mobile-upload-fab { display: inline-flex; }
+
+      /* 主区域底部留白，避免被 FAB 遮挡 */
+      .container { padding-bottom: 80px; }
+
+      /* 任务卡内边距收紧 */
+      .task { padding: var(--space-4); }
       .task__head { flex-wrap: wrap; }
       .task__stats { width: 100%; justify-content: space-between; }
-      /* 文件行：缩略图 + 进度占主行，状态 chip 折到下一行 */
-      .file-row { grid-template-columns: 40px minmax(0, 1fr); }
-      .file-row__thumb { width: 40px; height: 40px; }
-      .file-row__status { grid-column: 1 / -1; justify-content: flex-start; }
-      /* 最近任务行：窄屏纵向堆叠，避免日期+chip 长串换行错乱 */
-      .recent__row { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
-      /* 任务统计窄屏更紧凑，数字与标签同行 */
       .task__stat { display: flex; align-items: baseline; gap: var(--space-1); }
-      /* 任务底部：窄屏纵向堆叠，提示文字与按钮分行 */
+
+      /* 文件行紧凑 */
+      .file-row { padding: var(--space-2); }
+      .file-row__thumb { width: 40px; height: 40px; }
+      /* 失败行的重试按钮在窄屏缩成 icon，避免和 chip 挤 */
+      .file-row__status .btn { padding: 0 var(--space-2); }
+
+      .recent__row { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+
+      /* 任务底部按钮全宽 */
       .task__foot { flex-direction: column; align-items: stretch; gap: var(--space-3); }
       .task__foot > div { justify-content: stretch; }
       .task__foot .btn { flex: 1; }
     }
-  </style>
   </style>
 </head>
 <body>
@@ -293,54 +355,69 @@
         <!-- 已完成 -->
         <div class="file-row">
           <img class="file-row__thumb" src="https://picsum.photos/seed/u1/96/96" alt="" />
-          <div class="file-row__main">
+          <div class="file-row__info">
             <div class="file-row__name"><strong>IMG_4521.HEIC</strong><span>3.2 MB</span></div>
-            <div class="progress"><span class="progress__bar is-done" style="width:100%"></span></div>
+            <div class="file-row__status"><span class="chip chip--ok">已整理好</span></div>
           </div>
-          <div class="file-row__status"><span class="chip chip--ok">已整理好</span></div>
+          <div class="progress"><span class="progress__bar is-done" style="width:100%"></span></div>
         </div>
 
         <!-- 处理中 -->
         <div class="file-row">
           <img class="file-row__thumb" src="https://picsum.photos/seed/u2/96/96" alt="" />
-          <div class="file-row__main">
+          <div class="file-row__info">
             <div class="file-row__name"><strong>IMG_4522.HEIC</strong><span>4.1 MB</span></div>
-            <div class="progress"><span class="progress__bar is-processing" style="width:100%"></span></div>
+            <div class="file-row__status"><span class="chip chip--warn">正在整理</span></div>
           </div>
-          <div class="file-row__status"><span class="chip chip--warn">正在整理</span></div>
+          <div class="progress"><span class="progress__bar is-processing" style="width:100%"></span></div>
         </div>
 
         <!-- 上传中 -->
         <div class="file-row">
           <img class="file-row__thumb" src="https://picsum.photos/seed/u3/96/96" alt="" />
-          <div class="file-row__main">
+          <div class="file-row__info">
             <div class="file-row__name"><strong>birthday.mp4</strong><span>128 MB</span></div>
-            <div class="progress"><span class="progress__bar" style="width:64%"></span></div>
+            <div class="file-row__status"><span class="chip">传了 64%</span></div>
           </div>
-          <div class="file-row__status"><span class="chip">传了 64%</span></div>
+          <div class="progress"><span class="progress__bar" style="width:64%"></span></div>
         </div>
 
         <!-- 等待 -->
         <div class="file-row">
           <img class="file-row__thumb" src="https://picsum.photos/seed/u4/96/96" alt="" />
-          <div class="file-row__main">
+          <div class="file-row__info">
             <div class="file-row__name"><strong>IMG_4524.HEIC</strong><span>2.8 MB</span></div>
-            <div class="progress"><span class="progress__bar" style="width:0%"></span></div>
+            <div class="file-row__status"><span class="chip">排队中</span></div>
           </div>
-          <div class="file-row__status"><span class="chip">排队中</span></div>
+          <div class="progress"><span class="progress__bar" style="width:0%"></span></div>
         </div>
 
-        <!-- 失败 -->
+        <!-- 上传失败：原文件没传上去，调 retry-upload 重传原文件 -->
         <div class="file-row">
           <img class="file-row__thumb" src="https://picsum.photos/seed/u5/96/96" alt="" />
-          <div class="file-row__main">
+          <div class="file-row__info">
             <div class="file-row__name"><strong>IMG_4519.HEIC</strong><span>5.5 MB</span></div>
-            <div class="progress"><span class="progress__bar is-failed" style="width:100%"></span></div>
+            <div class="file-row__status">
+              <span class="chip chip--err">没传成</span>
+              <button class="btn btn--text" style="height:28px">重新上传</button>
+            </div>
           </div>
-          <div class="file-row__status">
-            <span class="chip chip--err">没传成</span>
-            <button class="btn btn--text" style="height:28px">再试一次</button>
+          <div class="progress"><span class="progress__bar is-failed" style="width:100%"></span></div>
+          <span class="file-row__err-hint">网络中断，没传上去</span>
+        </div>
+
+        <!-- 处理失败：原文件已传上去，但后台生成展示图失败，调 retry-processing 重新处理 -->
+        <div class="file-row">
+          <img class="file-row__thumb" src="https://picsum.photos/seed/u6/96/96" alt="" />
+          <div class="file-row__info">
+            <div class="file-row__name"><strong>IMG_4520.HEIC</strong><span>4.8 MB</span></div>
+            <div class="file-row__status">
+              <span class="chip chip--err">整理失败</span>
+              <button class="btn btn--text" style="height:28px">重新整理</button>
+            </div>
           </div>
+          <div class="progress"><span class="progress__bar is-failed" style="width:100%"></span></div>
+          <span class="file-row__err-hint">整理时出了点问题，照片传上去了但没生成预览</span>
         </div>
       </div>
 
@@ -378,6 +455,22 @@
     <div style="height:var(--space-16)"></div>
 
   </main>
+
+  <!-- demo 页脚链接（移动端用，替代 fixed demo-nav，不挡操作） -->
+  <nav class="demo-foot" aria-label="demo 页面切换">
+    <a href="timeline.html">时间线</a>
+    <a href="media-detail.html">详情</a>
+    <a href="upload.html" class="is-current">上传</a>
+    <a href="invite.html">邀请</a>
+    <a href="members.html">成员</a>
+    <a href="auth.html">登录</a>
+    <a href="join.html">加入</a>
+  </nav>
+  <label class="mobile-upload-fab">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    从相册选照片
+    <input type="file" multiple accept="image/*,video/*" />
+  </label>
 
   <nav class="demo-nav" aria-label="demo 页面切换">
     <a href="timeline.html" aria-label="时间线"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg><span class="demo-nav__label">时间线</span></a>

@@ -476,8 +476,33 @@ img { display: block; max-width: 100%; }
   background: var(--accent);
   color: var(--paper-raised);
 }
-/* 窄屏：隐藏文字标签，只留 icon，避免换行 */
+/* 窄屏：隐藏文字标签，只留 icon，避免换行。
+   并把 demo-nav 从底部移到顶部右侧——底部要留给页面真实操作
+   （upload 的 FAB、media-detail 的导航条、各页底部按钮），避免遮挡。*/
+/* 移动端：demo-nav 隐藏，避免和页面底部 fixed 操作元素（upload FAB、
+   media-detail 导航条、各页底部按钮）抢位置。
+   移动端页面间切换走 .demo-foot 文字链接行（在 main 末尾，非 fixed）。*/
 @media (max-width: 720px) {
-  .demo-nav a { padding: var(--space-2); }
-  .demo-nav__label { display: none; }
+  .demo-nav { display: none; }
+}
+
+/* demo 页脚链接行 —— 替代移动端 demo-nav，非 fixed，不挡操作 */
+.demo-foot {
+  display: none;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  justify-content: center;
+  padding: var(--space-8) var(--space-4) calc(var(--space-8) + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--hairline);
+  margin-top: var(--space-8);
+}
+.demo-foot a {
+  font-size: var(--text-xs);
+  color: var(--ink-faint);
+  text-decoration: none;
+}
+.demo-foot a:hover { color: var(--accent); }
+.demo-foot a.is-current { color: var(--accent); font-weight: 600; }
+@media (max-width: 720px) {
+  .demo-foot { display: flex; }
 }
